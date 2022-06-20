@@ -316,7 +316,7 @@ struct sk_buff *skb_recv_datagram(struct sock *sk, unsigned int flags,
 				   &off, err);
 }
 EXPORT_SYMBOL(skb_recv_datagram);
-
+// 函数用于释放UDP传输控制块接收队列上已经复制到用户空间的SKB
 void skb_free_datagram(struct sock *sk, struct sk_buff *skb)
 {
 	consume_skb(skb);

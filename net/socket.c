@@ -639,7 +639,7 @@ struct socket *sock_alloc(void)
 	return sock;
 }
 EXPORT_SYMBOL(sock_alloc);
-
+// sock_release()实现了关闭套接口的功能
 static void __sock_release(struct socket *sock, struct inode *inode)
 {
 	if (sock->ops) {
@@ -647,6 +647,8 @@ static void __sock_release(struct socket *sock, struct inode *inode)
 
 		if (inode)
 			inode_lock(inode);
+		// 通过套接口层接口proto_ops结构，调用release函数,实现对传输控制块得释放，同时对模块的引用计数减一。
+		// IPV4中所有的套接口的release接口都是inet_release(),他将实现对具体传输层close的有关调用
 		sock->ops->release(sock);
 		sock->sk = NULL;
 		if (inode)
@@ -655,13 +657,15 @@ static void __sock_release(struct socket *sock, struct inode *inode)
 		module_put(owner);
 	}
 
+	// 处理异步通州队列后，若还发现异步通州队列不为空
 	if (sock->wq.fasync_list)
 		pr_err("%s: fasync list not empty!\n", __func__);
-
+	// 释放i节点和套接口，一般不会被调用，除非系统处理有异常，这里是进行容错处理。
 	if (!sock->file) {
 		iput(SOCK_INODE(sock));
 		return;
 	}
+	// 将套接口中的文件描述符指针设置为空。到此为止有关套接口关闭的处理已经完成
 	sock->file = NULL;
 }
 
@@ -733,7 +737,7 @@ int sock_sendmsg(struct socket *sock, struct msghdr *msg)
 
 	return err ?: sock_sendmsg_nosec(sock, msg);
 }
-EXPORT_SYMBOL(sock_sendmsg);
+EXPORT_SYMBOL(sock_sendmsg); 
 
 /**
  *	kernel_sendmsg - send a message through @sock (kernel-space)
@@ -1376,7 +1380,13 @@ static int sock_close(struct inode *inode, struct file *filp)
  *	2. fasync_list is used under read_lock(&sk->sk_callback_lock)
  *	   or under socket lock
  */
-
+// sock_fasync实现了对套接口的异步通知队列增加和删除的更新操作。因为它在进程上下文中
+// 或在软中断中被使用，因此，在访问异步通知队列时需要上锁，对套接口上锁，对传输控制块
+// 上sk_callback_lock锁。
+// fd：文件描述符，在增加异步通知列表项时使用，是节点信息的一部分，参见fasync_struct
+// 结构。它是文件系统的一部分
+// flip：用来获取相关套接口和待操作文件描述符
+// on：更新标志，0为删除，非0为增加
 static int sock_fasync(int fd, struct file *filp, int on)
 {
 	struct socket *sock = filp->private_data;
@@ -1387,6 +1397,7 @@ static int sock_fasync(int fd, struct file *filp, int on)
 		return -EINVAL;
 
 	lock_sock(sk);
+	// 进行异步通知队列的增加或删除操作
 	fasync_helper(fd, filp, on, &wq->fasync_list);
 
 	if (!wq->fasync_list)
@@ -1402,22 +1413,29 @@ static int sock_fasync(int fd, struct file *filp, int on)
 
 int sock_wake_async(struct socket_wq *wq, int how, int band)
 {
+	// 校验套接口和套接口上的异步等待通知队列是否有效
 	if (!wq || !wq->fasync_list)
 		return -1;
 
 	switch (how) {
+		// 检测标识应用程序通过recv等调用时，是否在等待数据的接收。如果正在等待，
+		// 则不需要通知应用程序了，否则给应用程序发送SIGIO信号。
 	case SOCK_WAKE_WAITD:
 		if (test_bit(SOCKWQ_ASYNC_WAITDATA, &wq->flags))
 			break;
 		goto call_kill;
+		// 如果此前传输控制块的发送队列曾经到上限，则此时传输控制块的发送队列
+		// 可能已经低于上限，因此可以给应用程序发送SIGIO信号。
 	case SOCK_WAKE_SPACE:
 		if (!test_and_clear_bit(SOCKWQ_ASYNC_NOSPACE, &wq->flags))
 			break;
 		fallthrough;
+		// 对于普通数据，给应用程序发送SIGIO信号。
 	case SOCK_WAKE_IO:
 call_kill:
 		kill_fasync(&wq->fasync_list, SIGIO, band);
 		break;
+		// 对于带外数据，给应用程序发送SIGURG信号。
 	case SOCK_WAKE_URG:
 		kill_fasync(&wq->fasync_list, SIGURG, band);
 	}
@@ -1764,19 +1782,23 @@ int __sys_bind(int fd, struct sockaddr __user *umyaddr, int addrlen)
 	struct socket *sock;
 	struct sockaddr_storage address;
 	int err, fput_needed;
-
+	// 根据文件描述符获取socket
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (sock) {
+		// 将地址数据从用户空间拷贝到内核空间
 		err = move_addr_to_kernel(umyaddr, addrlen, &address);
 		if (!err) {
+			// 安全模块对bind做检查
 			err = security_socket_bind(sock,
 						   (struct sockaddr *)&address,
 						   addrlen);
 			if (!err)
+				// 调用套接口层的bind函数
 				err = sock->ops->bind(sock,
 						      (struct sockaddr *)
 						      &address, addrlen);
 		}
+		// 根据fput_needed标志，减少对文件描述符的引用计数
 		fput_light(sock->file, fput_needed);
 	}
 	return err;
@@ -1792,23 +1814,25 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
  *	necessary for a listen, and if that works, we mark the socket as
  *	ready for listening.
  */
-
+// backlog：最大半连接数
 int __sys_listen(int fd, int backlog)
 {
 	struct socket *sock;
 	int err, fput_needed;
 	int somaxconn;
-
+	// 根据文件描述符获取socket，并且返回是否需要减少对文件引用计数得标志
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (sock) {
+		// 对半连接数进行最大值得校验，如果超过最大值，强制设置为最大值
 		somaxconn = sock_net(sock->sk)->core.sysctl_somaxconn;
 		if ((unsigned int)backlog > somaxconn)
 			backlog = somaxconn;
-
+		// 安全模块对套接字的listen做检查
 		err = security_socket_listen(sock, backlog);
+		// SOCK_DGRAM和SOCK_RAW不能调用listen,只有SOCK_STREAM支持listen接口
 		if (!err)
 			err = sock->ops->listen(sock, backlog);
-
+		// 最后根据fput_needed标志，减少对文件描述符的引用计数
 		fput_light(sock->file, fput_needed);
 	}
 	return err;
@@ -1828,14 +1852,17 @@ struct file *do_accept(struct file *file, unsigned file_flags,
 	int err, len;
 	struct sockaddr_storage address;
 
+	// 从文件得到套接字
 	sock = sock_from_file(file);
 	if (!sock)
 		return ERR_PTR(-ENOTSOCK);
 
+	// 分配一个新的socket，准备用来接收新的连接
 	newsock = sock_alloc();
 	if (!newsock)
 		return ERR_PTR(-ENFILE);
 
+	// 将listen的socket的类型和协议操作设置到新的socket上
 	newsock->type = sock->type;
 	newsock->ops = sock->ops;
 
@@ -1843,21 +1870,26 @@ struct file *do_accept(struct file *file, unsigned file_flags,
 	 * We don't need try_module_get here, as the listening socket (sock)
 	 * has the protocol module (sock->ops->owner) held.
 	 */
+	// 如果是内核模块，则增加支持newsock套接口的协议的内核模块的引用计数，防止对模块的卸载
 	__module_get(newsock->ops->owner);
-
+	// 给套接口newsocket分配文件描述符，并且跟套接口绑定
 	newfile = sock_alloc_file(newsock, flags, sock->sk->sk_prot_creator->name);
 	if (IS_ERR(newfile))
 		return newfile;
-
+	// 安全模块对accept做检查
 	err = security_socket_accept(sock, newsock);
 	if (err)
 		goto out_fd;
 
+	// 通过套接口系统调用的跳转表proto_ops结构，调用对应传输协议中的accept函数.
+	// 只有SOCK_STREAM支持accept接口
 	err = sock->ops->accept(sock, newsock, sock->file->f_flags | file_flags,
 					false);
 	if (err < 0)
 		goto out_fd;
 
+	// 如果需要获取客户方套接字地址，则调用对应传输协议中的getname函数，
+	// 如果成功，则将获取的信息复制到用户空间
 	if (upeer_sockaddr) {
 		len = newsock->ops->getname(newsock,
 					(struct sockaddr *)&address, 2);
@@ -1964,18 +1996,18 @@ int __sys_connect_file(struct file *file, struct sockaddr_storage *address,
 {
 	struct socket *sock;
 	int err;
-
+	// 从文件结构中获取套接口
 	sock = sock_from_file(file);
 	if (!sock) {
 		err = -ENOTSOCK;
 		goto out;
 	}
-
+	// 安全模块对connect做检查
 	err =
 	    security_socket_connect(sock, (struct sockaddr *)address, addrlen);
 	if (err)
 		goto out;
-
+	// 通过套接口系统调用的跳转表proto_ops结构，调用对应传输协议中的connect函数
 	err = sock->ops->connect(sock, (struct sockaddr *)address, addrlen,
 				 sock->file->f_flags | file_flags);
 out:
@@ -1987,10 +2019,11 @@ int __sys_connect(int fd, struct sockaddr __user *uservaddr, int addrlen)
 	int ret = -EBADF;
 	struct fd f;
 
+	// 根据文件描述符得到文件指针
 	f = fdget(fd);
 	if (f.file) {
 		struct sockaddr_storage address;
-
+		// 将地址信息从用户空间拷贝到地址空间
 		ret = move_addr_to_kernel(uservaddr, addrlen, &address);
 		if (!ret)
 			ret = __sys_connect_file(f.file, &address, addrlen, 0);
@@ -2017,18 +2050,19 @@ int __sys_getsockname(int fd, struct sockaddr __user *usockaddr,
 	struct socket *sock;
 	struct sockaddr_storage address;
 	int err, fput_needed;
-
+	// 通过文件描述符得到套接口
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		goto out;
-
+	// 安全模块的检查
 	err = security_socket_getsockname(sock);
 	if (err)
 		goto out_put;
-
+	// 调用套接口层proto_ops结构中的getname函数
 	err = sock->ops->getname(sock, (struct sockaddr *)&address, 0);
 	if (err < 0)
 		goto out_put;
+	// 将地址信息拷贝到用户空间
 	/* "err" is actually length in this case */
 	err = move_addr_to_user(&address, err, usockaddr, usockaddr_len);
 
@@ -2230,10 +2264,12 @@ int __sys_setsockopt(int fd, int level, int optname, char __user *user_optval,
 	if (optlen < 0)
 		return -EINVAL;
 
+	// 根据文件描述符得到socket
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		return err;
 
+	// 安全检查
 	err = security_socket_setsockopt(sock, level, optname);
 	if (err)
 		goto out_put;
@@ -2251,11 +2287,13 @@ int __sys_setsockopt(int fd, int level, int optname, char __user *user_optval,
 
 	if (kernel_optval)
 		optval = KERNEL_SOCKPTR(kernel_optval);
+	// 如果是通用套接口级的选项，直接调用sock_setsockopt进行处理
 	if (level == SOL_SOCKET && !sock_use_custom_sol_socket(sock))
 		err = sock_setsockopt(sock, level, optname, optval, optlen);
 	else if (unlikely(!sock->ops->setsockopt))
 		err = -EOPNOTSUPP;
 	else
+		// 调用对应套接口层的setsockopt函数
 		err = sock->ops->setsockopt(sock, level, optname, optval,
 					    optlen);
 	kfree(kernel_optval);
@@ -2325,8 +2363,10 @@ SYSCALL_DEFINE5(getsockopt, int, fd, int, level, int, optname,
 int __sys_shutdown_sock(struct socket *sock, int how)
 {
 	int err;
-
+	// 安全模块对套接口shutdown做检查，这里不作论述
 	err = security_socket_shutdown(sock, how);
+	// 通过套接口层接口proto_ops结构，调用shutdown函数，
+	// 它将实现对具体传输层接口shutdown的有关调用
 	if (!err)
 		err = sock->ops->shutdown(sock, how);
 
@@ -2337,10 +2377,11 @@ int __sys_shutdown(int fd, int how)
 {
 	int err, fput_needed;
 	struct socket *sock;
-
+	// 根据文件描述符获取socket
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (sock != NULL) {
 		err = __sys_shutdown_sock(sock, how);
+		// 根据fput_needed判断是否需要减少对文件的引用计数
 		fput_light(sock->file, fput_needed);
 	}
 	return err;

@@ -4335,12 +4335,15 @@ void tcp_reset(struct sock *sk, struct sk_buff *skb)
  *
  *	If we are in FINWAIT-2, a received FIN moves us to TIME-WAIT.
  */
+// 在TCP中还有些地方会通知套接口的fasync_list队列上的进程。比如。当TCP接收到FIN段后，如果此时套接口未
+// 在DEAD状态，则唤醒等待该套接口的进程。如果在发送接收方向都进行了关闭，或者此时该传输控制块处于CLOSE
+// 状态，则通知异步等待该套接口的进程，该连接已经终止，否则通知进程连接可以进行写操作。
 void tcp_fin(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	inet_csk_schedule_ack(sk);
-
+	// 接收方向进行关闭
 	sk->sk_shutdown |= RCV_SHUTDOWN;
 	sock_set_flag(sk, SOCK_DONE);
 

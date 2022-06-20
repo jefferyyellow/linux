@@ -34,6 +34,7 @@
 #define MAX_INET_PROTOS		256
 
 /* This is used to register protocols. */
+// 这用于注册协议
 struct net_protocol {
 	int			(*early_demux)(struct sk_buff *skb);
 	int			(*early_demux_handler)(struct sk_buff *skb);
@@ -77,16 +78,20 @@ struct net_offload {
 #define INET6_PROTO_GSO_EXTHDR	0x1
 
 /* This is used to register socket interfaces for IP protocols.  */
+// 这用于为IP协议注册套接字接口
 struct inet_protosw {
 	struct list_head list;
 
         /* These two fields form the lookup key.  */
+	// 套接口类型
 	unsigned short	 type;	   /* This is the 2nd argument to socket(2). */
+	// 传输层协议
 	unsigned short	 protocol; /* This is the L4 protocol number.  */
-
+	// 套接口传输层接口
 	struct proto	 *prot;
+	// 套接口层接口
 	const struct proto_ops *ops;
-  
+	// 标志位
 	unsigned char	 flags;      /* See INET_PROTOSW_* below.  */
 };
 #define INET_PROTOSW_REUSE 0x01	     /* Are ports automatically reusable? */

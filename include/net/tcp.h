@@ -119,7 +119,7 @@ void tcp_time_wait(struct sock *sk, int state, int timeo);
 				 * retransmission with the current
 				 * initial RTO.
 				 */
-
+// 多长的时间去等待销毁TIME-WAIT
 #define TCP_TIMEWAIT_LEN (60*HZ) /* how long to wait to destroy TIME-WAIT
 				  * state, about 60 seconds	*/
 #define TCP_FIN_TIMEOUT	TCP_TIMEWAIT_LEN
@@ -841,7 +841,10 @@ static inline u64 tcp_skb_timestamp_us(const struct sk_buff *skb)
  * This is 44 bytes if IPV6 is enabled.
  * If this grows please adjust skbuff.h:skbuff->cb[xxx] size appropriately.
  */
+// TCP层在SKB区中有个私有信息控制块，即skb_buff结构的cb成员，TCP利用这个字段存储了一个tcp_skb_cb结构。
 struct tcp_skb_cb {
+	// seq为当前段开始序号，而end_seq为当前段开始序号加上当前段数据长度，如果标志域中存在SYN或FIN标志，
+	// 则还需加1，因为SYN和FIN标志都会消耗一个序号。利用end_seq、seq和标志，很容易得到数据长度。
 	__u32		seq;		/* Starting sequence number	*/
 	__u32		end_seq;	/* SEQ + FIN + SYN + datalen	*/
 	union {
@@ -857,8 +860,15 @@ struct tcp_skb_cb {
 			u16	tcp_gso_size;
 		};
 	};
+	// 记录原始TCP首部标志。发送过程中，tcp_transmit_skb()在发送TCP段之前会根据此标志
+	// 来填充发送段的TCP首部的标志域;接收过程中，会提取接收段的TCP首部标志到该字段中。
 	__u8		tcp_flags;	/* TCP header flags. (tcp[13])	*/
-
+	// 主要用来描述段的重传状态，同时标识包是否包含紧急数据，检查接收到的SACK，根据需要更新TCPCB_TAGBITS标志位，
+	// 重传引擎会根据该标志位来确定是否需要重传。一旦重传超时发生，所有的SACK状态标志将被清除，因为无需再关心其状态。
+	// 无论通过哪种方式重传了包，重传超时或者快速重传，都会设置TCPCB_EVER_RETRANS标志位。
+	// 值得注意的是，在描述包的重传状态之前的sacked值并非段的重传状态，而是SACK选项在TCP首部中的偏移，此值在接收TCP
+	// 段之后的tcp_parse_options()中解析TCP选项时被赋值。而后在tcp_sacktag_write_queue中才真正根据SACK选项表字段
+	// 的重传状态等。
 	__u8		sacked;		/* State flags for SACK.	*/
 #define TCPCB_SACKED_ACKED	0x01	/* SKB ACK'd by a SACK block	*/
 #define TCPCB_SACKED_RETRANS	0x02	/* SKB retransmitted		*/
@@ -874,6 +884,7 @@ struct tcp_skb_cb {
 			eor:1,		/* Is skb MSG_EOR marked? */
 			has_rxtstamp:1,	/* SKB has a RX timestamp	*/
 			unused:5;
+	// 接收到的TCP段首部中的确认序号。
 	__u32		ack_seq;	/* Sequence number ACK'd	*/
 	union {
 		struct {
@@ -889,6 +900,9 @@ struct tcp_skb_cb {
 			/* when we reached the "delivered" count */
 			u64 delivered_mstamp;
 		} tx;   /* only used for outgoing skbs */
+		// 在TCP处理接收到的TCP段之前，下层协议（IPv4或IPv6)会先处理该段，且会利用SKB
+		// 中的控制块来记录每一个包中的信息，例如IPv4会记录从IP首部中解析出的IP首部选项。
+		// 为了不破坏三层协议层私有数据，在SKB中TCP控制块的前部定义了这个结构，这包括IPv4和IPv6
 		union {
 			struct inet_skb_parm	h4;
 #if IS_ENABLED(CONFIG_IPV6)
@@ -1374,6 +1388,7 @@ static inline __sum16 tcp_v4_check(int len, __be32 saddr,
 	return csum_tcpudp_magic(saddr, daddr, len, IPPROTO_TCP, base);
 }
 
+// tcp_checksum_complete都是基于伪首部累加和，完成全包检验和的检测。用于校验没有负载的TCP段，
 static inline bool tcp_checksum_complete(struct sk_buff *skb)
 {
 	return !skb_csum_unnecessary(skb) &&
@@ -1417,6 +1432,7 @@ void tcp_select_initial_window(const struct sock *sk, int __space,
 			       __u32 *window_clamp, int wscale_ok,
 			       __u8 *rcv_wscale, __u32 init_rcv_wnd);
 
+// 
 static inline int tcp_win_from_space(const struct sock *sk, int space)
 {
 	int tcp_adv_win_scale = sock_net(sk)->ipv4.sysctl_tcp_adv_win_scale;

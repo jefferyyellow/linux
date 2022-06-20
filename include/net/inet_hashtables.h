@@ -35,6 +35,9 @@
  * The 'e' prefix stands for Establish, but we really put all sockets
  * but LISTEN ones.
  */
+// 这适用于具有完整标识的所有连接，没有通配符。'e' 前缀代表Establish，
+// 我们真的把所有的套接字都放进去了，除了LISTEN状态的那些。
+// chain用于链接传输控制块
 struct inet_ehash_bucket {
 	struct hlist_nulls_head chain;
 };
@@ -76,7 +79,12 @@ struct inet_ehash_bucket {
 struct inet_bind_bucket {
 	possible_net_t		ib_net;
 	int			l3mdev;
+	// 已绑定的端口
 	unsigned short		port;
+	// 标识端口是否能重用
+	// 0：此端口已通过bind系统调用绑定，不能重用
+	// 1：此端口已通过bind系统调用绑定，且能重用
+	// -1：此端口被客户端动态绑定（由inet_hash_connect()进行绑定）
 	signed char		fastreuse;
 	signed char		fastreuseport;
 	kuid_t			fastuid;
@@ -86,7 +94,9 @@ struct inet_bind_bucket {
 	__be32			fast_rcv_saddr;
 	unsigned short		fast_sk_family;
 	bool			fast_ipv6_only;
+	// 用来存储bhash散列表的节点。
 	struct hlist_node	node;
+	// 为绑定在该端口上的传输控制块链表
 	struct hlist_head	owners;
 };
 
@@ -98,6 +108,8 @@ static inline struct net *ib_net(struct inet_bind_bucket *ib)
 #define inet_bind_bucket_for_each(tb, head) \
 	hlist_for_each_entry(tb, head, node)
 
+// lock为控制该链表的读写锁；、
+// chain用于建立端口绑定信息块，即inet_bind_bucket结构链表。
 struct inet_bind_hashbucket {
 	spinlock_t		lock;
 	struct hlist_head	chain;
@@ -116,7 +128,8 @@ struct inet_listen_hashbucket {
 
 /* This is for listening sockets, thus all sockets which possess wildcards. */
 #define INET_LHTABLE_SIZE	32	/* Yes, really, this is all you need. */
-
+// TCP根据状态将传输控制块存储到多个不同的散列表中。TCP传输层中用一个inet_hashinfo结构类型的全局变量
+// tcp_hashinfo对所有的散列表进行集中管理。hashinfo在TCP模块初始化时被初始化。
 struct inet_hashinfo {
 	/* This is for sockets with full identity only.  Sockets here will
 	 * always be without wildcards and will have the following invariant:
@@ -124,6 +137,8 @@ struct inet_hashinfo {
 	 *          TCP_ESTABLISHED <= sk->sk_state < TCP_CLOSE
 	 *
 	 */
+	// 这仅适用于具有完整标识的套接字。这里的套接字将始终没有通配符，并且将具有以下不变量：
+	// 用来管理TCP_ESTABLISHED到TCP_CLOSE（不含）之间状态的传输控制块的散列表。
 	struct inet_ehash_bucket	*ehash;
 	spinlock_t			*ehash_locks;
 	unsigned int			ehash_mask;
@@ -132,11 +147,14 @@ struct inet_hashinfo {
 	/* Ok, let's try this, I give up, we do need a local binding
 	 * TCP hash as well as the others for fast bind/connect.
 	 */
+	// 我们确实需要一个本地绑定TCP哈希表以及其他用于快速绑定/连接的哈希表。
+	// 大小为bhash_size的bhash散列表主要用来存储已绑定端口的信息，其类型为inet_bind_hashbucket
 	struct kmem_cache		*bind_bucket_cachep;
 	struct inet_bind_hashbucket	*bhash;
 	unsigned int			bhash_size;
 
 	/* The 2nd listener table hashed by local port and address */
+	// 本地端口和地址散列的第二个侦听状态的表
 	unsigned int			lhash2_mask;
 	struct inet_listen_hashbucket	*lhash2;
 };

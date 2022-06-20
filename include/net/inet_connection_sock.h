@@ -31,24 +31,36 @@ struct tcp_congestion_ops;
  * Pointers to address related TCP functions
  * (i.e. things that depend on the address family)
  */
+// 封装了一组与传输层相关的操作集，包括向网络层发送的接口，传输层的setsockopt接口等。
 struct inet_connection_sock_af_ops {
+	// 从传输层向网络层传递的接口，TCP中设置为ip_queue_xmit
 	int	    (*queue_xmit)(struct sock *sk, struct sk_buff *skb, struct flowi *fl);
+	// 计算传输层首部校验和函数,TCP中初始化为tcp_v4_send_check
 	void	    (*send_check)(struct sock *sk, struct sk_buff *skb);
+	// 如果传输控制块还没有路由缓存项,为传输控制块选择路由缓存项,TCP中设置为inet_sk_rebuild_header
 	int	    (*rebuild_header)(struct sock *sk);
+	// 
 	void	    (*sk_rx_dst_set)(struct sock *sk, const struct sk_buff *skb);
+	// 处理连接请求接口,TCP中设置为tcp_v4_conn_request
 	int	    (*conn_request)(struct sock *sk, struct sk_buff *skb);
+	// 在完成三次握手后,调用此接口来创建一个新的套接口,在TCP中初始化为tcp_v4_syn_recv_sock
 	struct sock *(*syn_recv_sock)(const struct sock *sk, struct sk_buff *skb,
 				      struct request_sock *req,
 				      struct dst_entry *dst,
 				      struct request_sock *req_unhash,
 				      bool *own_req);
+	// 在IPv4中为IP首部的长度，即iphdr结构的大小
 	u16	    net_header_len;
 	u16	    net_frag_header_len;
+	// IP套接字地址长度，在IPv4中就是sockaddr_in结构的长度
 	u16	    sockaddr_len;
+	// setsockopt和getsockopt传输层的系统调用接口
 	int	    (*setsockopt)(struct sock *sk, int level, int optname,
 				  sockptr_t optval, unsigned int optlen);
 	int	    (*getsockopt)(struct sock *sk, int level, int optname,
 				  char __user *optval, int __user *optlen);
+	// 将IP套接口地址结构中的地址信息复制到传输控制块中，TCP中为inet_csk_addr2_sockaddr()，
+	// 实际上这个接口并未使用
 	void	    (*addr2sockaddr)(struct sock *sk, struct sockaddr *);
 	void	    (*mtu_reduced)(struct sock *sk);
 };
@@ -78,51 +90,98 @@ struct inet_connection_sock_af_ops {
  * @icsk_probes_tstamp:    Probe timestamp (cleared by non-zero window ack)
  * @icsk_user_timeout:	   TCP_USER_TIMEOUT value
  */
+// 所有面向连接传输控制块的表示，在inet_sock结构的基础上，增加了有关进行连接、确认和重传等成员
 struct inet_connection_sock {
 	/* inet_sock has to be the first member! */
+	// 基础结构，一层层的扩展
 	struct inet_sock	  icsk_inet;
+	// TCP传输层收到客户端的连接请求以后，会创建一个客户端套接字存放到icsk_accept_queue容器中，
+	// 等待应用程序调用accept进行读取
 	struct request_sock_queue icsk_accept_queue;
+	// 指向与之绑定的本地端口信息，在绑定过程中被设置
 	struct inet_bind_bucket	  *icsk_bind_hash;
+	// 如果TCP段在指定时间内没接收到ACK，则认为发送失败，而进行重传的超时时间。通常为jiffies+icsk_rto，
+	// 即在jiffies+rto之后进行重传
 	unsigned long		  icsk_timeout;
+	// 通过标识符icsk_pending来区分重传定时器和持续定时器的实现，在超时时间内没有接收到相应的ACK段会发送重传。
+	// 在连接对方通告接收窗口为0时会启动持续定时器。
  	struct timer_list	  icsk_retransmit_timer;
+	// 用于延迟发送ACK段的定时器
  	struct timer_list	  icsk_delack_timer;
+	// 超时重传的时间，初始值为TCP_TIMEOUT_INIT，当往返时间超过此值时被认为传输失败。需要注意的是，
+	// 超时重传的时间是根据当前网络的情况动态计算的。
 	__u32			  icsk_rto;
+	// 
 	__u32                     icsk_rto_min;
 	__u32                     icsk_delack_max;
+	// 最后一次更新的路径MTU(PMTU)。
 	__u32			  icsk_pmtu_cookie;
+	// 指向实现某个拥塞控制算法的指针。到目前为止，Linux支持多种拥塞控制算法，而用户也可以编写自己的
+	// 拥塞控制机制模块加载到内核中，参见TCP_CONGESTION选项。
 	const struct tcp_congestion_ops *icsk_ca_ops;
+	// TCP的一个操作接口集，包括向IP层发送的接口，TCP层setsockopt接口等。加载TCP协议模块时，在tcp_v4_init_sock中被
+	// 初始化为inet_connection_sock_af_ops结构类型常量ipv4_specific
 	const struct inet_connection_sock_af_ops *icsk_af_ops;
 	const struct tcp_ulp_ops  *icsk_ulp_ops;
 	void __rcu		  *icsk_ulp_data;
 	void (*icsk_clean_acked)(struct sock *sk, u32 acked_seq);
+	// 根据PMTU同步本地MSS函数指针，加载TCP协议模块时，在tcp_v4_init_sock中被初始化为tcp_sync_mss结构类型常量
 	unsigned int		  (*icsk_sync_mss)(struct sock *sk, u32 pmtu);
+	// 拥塞控制状态
 	__u8			  icsk_ca_state:5,
 				  icsk_ca_initialized:1,
 				  icsk_ca_setsockopt:1,
 				  icsk_ca_dst_locked:1;
+	// 记录超时重传次数
 	__u8			  icsk_retransmits;
+	// 标识预定的定时器事件，实际上，只取ICSK_TIME_RETRANS或ICSK_TIME_PROBE0,因为这两种定时操作使用的是同一个定时器，
+	// 因此需要用这个标志来区分正在使用的是哪个定时器。重传和零窗口探测时会调用inet_csk_reset_xmit_timer()设置该字段。
 	__u8			  icsk_pending;
+	// 用来计算持续定时器的下一个设定值的指数退避算法指数，在传送超时时会递增
 	__u8			  icsk_backoff;
+	// 在建立TCP连接时最多允许重试发送SYN或SYN+ACK段的次数，参见TCP_SYNCNT选项和tcp_synack_retries系统参数。
 	__u8			  icsk_syn_retries;
+	// 持续定时器或保活定时器周期性发送出去但未被确认的TCP段数目，在收到ACK之后清零。
 	__u8			  icsk_probes_out;
+	// IP首部中选项部分长度
 	__u16			  icsk_ext_hdr_len;
+	// 延时确认控制数据块
 	struct {
+		// 标识当前需要确认的紧急程度和状态，在数据从内核空间复制到用户空间时会检测该状态，
+		// 如果需要则立即发送确认：而在计算rcv_mss时，会根据情况调整此状态。由于pending是按位存储的，
+		// 因此多个状态可以同时存在。
 		__u8		  pending;	 /* ACK is pending			   */
+		// 标识启用或禁用确认模式，通过TCP_QUICKACK选项设置其值。
+		// 0：不延迟ACK段的发送，而是进行快速发送，
+		// 1：将会延迟发送ACK
+		// 在快速确认模式下，会立即发送ACK。整个TCP处理过程中，如果需要还会进入到正常模式允许，也就是说，
+		// 这个标志的设置不是永久性的，而只是在当时启用/禁用快速确认模式，在这之后，根据延时确认超时、数据传输等因素，
+		// 有可能会再次进入或离开快速确认模式。
 		__u8		  quick;	 /* Scheduled number of quick acks	   */
 		__u8		  pingpong;	 /* The session is interactive		   */
 		__u8		  retry;	 /* Number of attempts			   */
+		// 用来计算延迟确认的估值，在接收到TCP段时会根据本次与上次接收的时间间隔来调整该值，
+		// 而在设置延时确认定时器时会根据条件调整该值
 		__u32		  ato;		 /* Predicted tick of soft clock	   */
+		// 当前的延时确认时间，超时会发送ACK
 		unsigned long	  timeout;	 /* Currently scheduled timeout		   */
+		// 标识最近一次接收到数据包的时间。
 		__u32		  lrcvtime;	 /* timestamp of last received data packet */
+		// 最后一个接收到的段的长度，用来计算rcv_mss
 		__u16		  last_seg_size; /* Size of last incoming segment	   */
+		// 由最近接收到段计算的MSS，主要用来确定是否执行延时确认。
 		__u16		  rcv_mss;	 /* MSS used for delayed ACK decisions	   */
 	} icsk_ack;
+	// 路径MTU发现的控制数据块，在tcp_mtup_init中初始化。
 	struct {
 		/* Range of MTUs to search */
+		// 用于标识进行路径MTU发现的区间的上下限。
 		int		  search_high;
 		int		  search_low;
 
 		/* Information on the current probe. */
+		// 为当前路径MTU探测段的长度，也用于判断路径MTU探测是否完成。无论成功还是失败，
+		// 路径MTU探测完成后此值都将初始化为0
 		u32		  probe_size:31,
 		/* Is the MTUP feature enabled for this connection? */
 				  enabled:1;
@@ -131,7 +190,7 @@ struct inet_connection_sock {
 	} icsk_mtup;
 	u32			  icsk_probes_tstamp;
 	u32			  icsk_user_timeout;
-
+	// 存储各种有关TCP拥塞控制算法的私有参数。虽然这里定义的是16个无符号整型，但在实际存储时的类型因拥塞控制算法而异
 	u64			  icsk_ca_priv[104 / sizeof(u64)];
 #define ICSK_CA_PRIV_SIZE	  sizeof_field(struct inet_connection_sock, icsk_ca_priv)
 };

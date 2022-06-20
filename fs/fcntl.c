@@ -858,6 +858,9 @@ static void fasync_free_rcu(struct rcu_head *head)
  * match the state "is the filp on a fasync list".
  *
  */
+// 删除一个fasync项，如果成功删除，返回正数，并清除FASYNC标志。
+// 如果没有fasync项，则不做任何操作并返回0。
+// NOTE：很重要的一点是FASYNC标志始终与状态“是否在fasync列表中”相匹配。
 int fasync_remove_entry(struct file *filp, struct fasync_struct **fapp)
 {
 	struct fasync_struct *fa, **fp;
@@ -906,6 +909,7 @@ void fasync_free(struct fasync_struct *new)
  * NOTE! It is very important that the FASYNC flag always
  * match the state "is the filp on a fasync list".
  */
+// 在fasync列表中插入一个新条目
 struct fasync_struct *fasync_insert_entry(int fd, struct file *filp, struct fasync_struct **fapp, struct fasync_struct *new)
 {
         struct fasync_struct *fa, **fp;
@@ -915,13 +919,13 @@ struct fasync_struct *fasync_insert_entry(int fd, struct file *filp, struct fasy
 	for (fp = fapp; (fa = *fp) != NULL; fp = &fa->fa_next) {
 		if (fa->fa_file != filp)
 			continue;
-
+		// 找到了就修改
 		write_lock_irq(&fa->fa_lock);
 		fa->fa_fd = fd;
 		write_unlock_irq(&fa->fa_lock);
 		goto out;
 	}
-
+	// 将新节点放在表头
 	rwlock_init(&new->fa_lock);
 	new->magic = FASYNC_MAGIC;
 	new->fa_file = filp;
@@ -940,10 +944,11 @@ out:
  * Add a fasync entry. Return negative on error, positive if
  * added, and zero if did nothing but change an existing one.
  */
+// 将一个新的fasync_struct插入到fasync列表中
 static int fasync_add_entry(int fd, struct file *filp, struct fasync_struct **fapp)
 {
 	struct fasync_struct *new;
-
+	// 分配节点
 	new = fasync_alloc();
 	if (!new)
 		return -ENOMEM;
@@ -971,8 +976,10 @@ static int fasync_add_entry(int fd, struct file *filp, struct fasync_struct **fa
  */
 int fasync_helper(int fd, struct file * filp, int on, struct fasync_struct **fapp)
 {
+	// 通过on来判断是删除还是增加
 	if (!on)
 		return fasync_remove_entry(filp, fapp);
+	// 增加一个节点
 	return fasync_add_entry(fd, filp, fapp);
 }
 

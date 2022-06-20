@@ -815,7 +815,7 @@ static int select_size(struct sock *sk, int io_len, int flags, int len)
 
 	return io_len;
 }
-
+// 将sk添加到发送队列尾部
 void skb_entail(struct sock *sk, struct sk_buff *skb, int flags)
 {
 	struct chtls_sock *csk = rcu_dereference_sk_user_data(sk);

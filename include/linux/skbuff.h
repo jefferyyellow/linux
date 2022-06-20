@@ -1389,6 +1389,7 @@ static inline void kfree_skb_list(struct sk_buff *segs)
 #ifdef CONFIG_TRACEPOINTS
 void consume_skb(struct sk_buff *skb);
 #else
+// 直接封装的是kfree_skb
 static inline void consume_skb(struct sk_buff *skb)
 {
 	return kfree_skb(skb);

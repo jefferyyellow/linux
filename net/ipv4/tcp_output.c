@@ -50,6 +50,7 @@
 /* Refresh clocks of a TCP socket,
  * ensuring monotically increasing values.
  */
+// 刷新TCP套接字的时钟，确保值单调递增。
 void tcp_mstamp_refresh(struct tcp_sock *tp)
 {
 	u64 val = tcp_clock_ns();

@@ -323,7 +323,7 @@ struct tcp_splice_state {
  */
 unsigned long tcp_memory_pressure __read_mostly;
 EXPORT_SYMBOL_GPL(tcp_memory_pressure);
-
+// 缓存进入警告状态
 void tcp_enter_memory_pressure(struct sock *sk)
 {
 	unsigned long val;
@@ -334,6 +334,7 @@ void tcp_enter_memory_pressure(struct sock *sk)
 
 	if (!val)
 		val--;
+	// 如果tcp_memory_pressure得值为0，则将tcp_memory_pressure置为val
 	if (!cmpxchg(&tcp_memory_pressure, 0, val))
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPMEMORYPRESSURES);
 }
@@ -599,6 +600,7 @@ int tcp_ioctl(struct sock *sk, int cmd, unsigned long arg)
 	bool slow;
 
 	switch (cmd) {
+	// 获取在接收队列缓存中未读的数据量。如果在LISTEN状态,则返回EINVAL错误。
 	case SIOCINQ:
 		if (sk->sk_state == TCP_LISTEN)
 			return -EINVAL;
@@ -607,10 +609,12 @@ int tcp_ioctl(struct sock *sk, int cmd, unsigned long arg)
 		answ = tcp_inq(sk);
 		unlock_sock_fast(sk, slow);
 		break;
+	// 检测带外数据是否已全部被用户进程读取，返回true表示所有带外数据已被用户进程接收。
 	case SIOCATMARK:
 		answ = READ_ONCE(tp->urg_data) &&
 		       READ_ONCE(tp->urg_seq) == READ_ONCE(tp->copied_seq);
 		break;
+	// 获取在发送队列缓存中未发送出去的数据量。如果在LISTEN状态，则返回EINVAL错误。
 	case SIOCOUTQ:
 		if (sk->sk_state == TCP_LISTEN)
 			return -EINVAL;
@@ -851,33 +855,41 @@ ssize_t tcp_splice_read(struct socket *sock, loff_t *ppos,
 }
 EXPORT_SYMBOL(tcp_splice_read);
 
+// 分配SKB
 struct sk_buff *tcp_stream_alloc_skb(struct sock *sk, int size, gfp_t gfp,
 				     bool force_schedule)
 {
 	struct sk_buff *skb;
-
+	// 如果在告警状态，回收缓存
 	if (unlikely(tcp_under_memory_pressure(sk)))
 		sk_mem_reclaim_partial(sk);
 
+	// 调用alloc_skb_fclone来分配指定长度的SKB
 	skb = alloc_skb_fclone(size + MAX_TCP_HEADER, gfp);
 	if (likely(skb)) {
 		bool mem_scheduled;
 
 		skb->truesize = SKB_TRUESIZE(skb_end_offset(skb));
+		
 		if (force_schedule) {
 			mem_scheduled = true;
 			sk_forced_mem_schedule(sk, skb->truesize);
 		} else {
+			// 调用sk_wmem_schedule确认发送缓存是否可用
 			mem_scheduled = sk_wmem_schedule(sk, skb->truesize);
 		}
+		// 可用则返回SKB
 		if (likely(mem_scheduled)) {
 			skb_reserve(skb, MAX_TCP_HEADER);
 			skb->ip_summed = CHECKSUM_PARTIAL;
 			INIT_LIST_HEAD(&skb->tcp_tsorted_anchor);
 			return skb;
 		}
+		// 不可用就释放分配的SKB
 		__kfree_skb(skb);
 	} else {
+		// 分配失败进入告警状态，则使TCP缓存管理进入警告状态，同时如果没有通过SO_SNDBUFF选项
+		// 进行手工设定发送缓存大小的上限，则需重新调整发送缓存大小的上限，最后返回NULL。
 		sk->sk_prot->enter_memory_pressure(sk);
 		sk_stream_moderate_sndbuf(sk);
 	}
@@ -3665,7 +3677,8 @@ static int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 	release_sock(sk);
 	return err;
 }
-
+// TCP层套接口选项入口函数，在tcp_setsockopt中会根据选项的级别来选择不同的函数处理：
+// 如果是SOL_TCP级别，则调用do_tcp_setsockopt，否则通过IP接口调用ip_setsockopt
 int tcp_setsockopt(struct sock *sk, int level, int optname, sockptr_t optval,
 		   unsigned int optlen)
 {
@@ -4569,7 +4582,7 @@ static int __init set_thash_entries(char *str)
 	return 1;
 }
 __setup("thash_entries=", set_thash_entries);
-
+// TCP初始化系统控制参数，tcp_mem是一组用于控制TCP栈缓存使用的阈值。
 static void __init tcp_init_mem(void)
 {
 	unsigned long limit = nr_free_buffer_pages() / 16;
@@ -4579,7 +4592,8 @@ static void __init tcp_init_mem(void)
 	sysctl_tcp_mem[1] = limit;			/* 6.25 % */
 	sysctl_tcp_mem[2] = sysctl_tcp_mem[0] * 2;	/* 9.37 % */
 }
-
+// 传输层TCP模块的初始化函数tcp_init由IPv4协议族的初始化函数inet_init调用
+// 
 void __init tcp_init(void)
 {
 	int max_rshare, max_wshare, cnt;
@@ -4587,6 +4601,7 @@ void __init tcp_init(void)
 	unsigned int i;
 
 	BUILD_BUG_ON(TCP_MIN_SND_MSS <= MAX_TCP_OPTION_SPACE);
+	// SKB中cb数组必须大于tcp_skb_cb结构的大小，因为TCP层会在cb中存储一个tcp_skb_cb结构。
 	BUILD_BUG_ON(sizeof(struct tcp_skb_cb) >
 		     sizeof_field(struct sk_buff, cb));
 
@@ -4610,6 +4625,9 @@ void __init tcp_init(void)
 	 *
 	 * The methodology is similar to that of the buffer cache.
 	 */
+	// 分配用于存储TCP状态为TCP_ESTABLISHED的传输控制块的散列表；并根据thash_entries得到散列表的大小
+	// ehash_size，thash_entries作为内核参数，是TCP_ESTA-BLISHED状态TCP套接口散列表允许使用的大小；
+	// 然后初始化ehash散列表。
 	tcp_hashinfo.ehash =
 		alloc_large_system_hash("TCP established",
 					sizeof(struct inet_ehash_bucket),
@@ -4623,8 +4641,11 @@ void __init tcp_init(void)
 	for (i = 0; i <= tcp_hashinfo.ehash_mask; i++)
 		INIT_HLIST_NULLS_HEAD(&tcp_hashinfo.ehash[i].chain, i);
 
+	// 分配ehash的锁
 	if (inet_ehash_locks_alloc(&tcp_hashinfo))
 		panic("TCP: failed to alloc ehash_locks");
+	// 分配用于存储已绑定端口信息的散列表；并根据ehash_size（在创建ehash散列表时得到）得到散列表的大小
+	// bhash_size；然后初始化bhash散列表。
 	tcp_hashinfo.bhash =
 		alloc_large_system_hash("TCP bind",
 					sizeof(struct inet_bind_hashbucket),
@@ -4641,11 +4662,12 @@ void __init tcp_init(void)
 		INIT_HLIST_HEAD(&tcp_hashinfo.bhash[i].chain);
 	}
 
-
+	// 计算系统所能处理不属于任何进程的孤儿套接口的最大数tcp_max_orphans
 	cnt = tcp_hashinfo.ehash_mask + 1;
 	sysctl_tcp_max_orphans = cnt / 2;
-
+	// 初始化系统控制参数
 	tcp_init_mem();
+	// 初始化系统控制参数tcp_wmem和tcp_rmem
 	/* Set per-socket limits to no more than 1/128 the pressure threshold */
 	limit = nr_free_buffer_pages() << (PAGE_SHIFT - 7);
 	max_wshare = min(4UL*1024*1024, limit);
@@ -4664,6 +4686,7 @@ void __init tcp_init(void)
 
 	tcp_v4_init();
 	tcp_metrics_init();
+	// 向TCP传输控制块中注册reno拥塞控制算法，这是系统默认的拥塞控制算法
 	BUG_ON(tcp_register_congestion_control(&tcp_reno) != 0);
 	tcp_tasklet_init();
 	mptcp_init();

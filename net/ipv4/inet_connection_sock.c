@@ -559,15 +559,19 @@ EXPORT_SYMBOL(inet_csk_accept);
  * We may wish use just one timer maintaining a list of expire jiffies
  * to optimize.
  */
+// 使用不同的计时器进行重传、延迟确认和探测
+// 为了优化，我们可能希望只使用一个计时器来维护要过期jiffies列表。
 void inet_csk_init_xmit_timers(struct sock *sk,
 			       void (*retransmit_handler)(struct timer_list *t),
 			       void (*delack_handler)(struct timer_list *t),
 			       void (*keepalive_handler)(struct timer_list *t))
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
-
+	// 初始化重传计时器
 	timer_setup(&icsk->icsk_retransmit_timer, retransmit_handler, 0);
+	// 初始化延迟ACK计时器
 	timer_setup(&icsk->icsk_delack_timer, delack_handler, 0);
+	// 初始化保活计时器
 	timer_setup(&sk->sk_timer, keepalive_handler, 0);
 	icsk->icsk_pending = icsk->icsk_ack.pending = 0;
 }
@@ -670,6 +674,7 @@ no_route:
 EXPORT_SYMBOL_GPL(inet_csk_route_child_sock);
 
 /* Decide when to expire the request and when to resend SYN-ACK */
+// 决定何时使请求过期以及何时重新发送 SYN-ACK
 static void syn_ack_recalc(struct request_sock *req,
 			   const int max_syn_ack_retries,
 			   const u8 rskq_defer_accept,
@@ -806,14 +811,15 @@ static void reqsk_timer_handler(struct timer_list *t)
 	struct request_sock_queue *queue;
 	struct net *net;
 	int max_syn_ack_retries, qlen, expire = 0, resend = 0;
-
+	// 如果请求的不是LISTEN状态
 	if (inet_sk_state_load(sk_listener) != TCP_LISTEN) {
 		struct sock *nsk;
-
+		// 从SO_REUSEPORT组中选择一个套接字。
 		nsk = reuseport_migrate_sock(sk_listener, req_to_sk(req), NULL);
 		if (!nsk)
 			goto drop;
 
+		// 克隆请求。。。
 		nreq = inet_reqsk_clone(req, nsk);
 		if (!nreq)
 			goto drop;
@@ -823,6 +829,8 @@ static void reqsk_timer_handler(struct timer_list *t)
 		 * hold another count to prevent use-after-free and
 		 * call reqsk_put() just before return.
 		 */
+		// 克隆 req 的新计时器可以通过调用 inet_csk_reqsk_queue_drop_and_put() 减少 2，
+		// 因此保持另一个计数以防止 use-after-free 并在返回之前调用 reqsk_put()。
 		refcount_set(&nreq->rsk_refcnt, 2 + 1);
 		timer_setup(&nreq->rsk_timer, reqsk_timer_handler, TIMER_PINNED);
 		reqsk_queue_migrated(&inet_csk(nsk)->icsk_accept_queue, req);
@@ -833,6 +841,7 @@ static void reqsk_timer_handler(struct timer_list *t)
 
 	icsk = inet_csk(sk_listener);
 	net = sock_net(sk_listener);
+	// 获取建立TCP链接时最多允许重传SYN+ACK段的次数
 	max_syn_ack_retries = icsk->icsk_syn_retries ? : net->ipv4.sysctl_tcp_synack_retries;
 	/* Normally all the openreqs are young and become mature
 	 * (i.e. converted to established socket) for first timeout.
@@ -853,6 +862,12 @@ static void reqsk_timer_handler(struct timer_list *t)
 	 */
 	queue = &icsk->icsk_accept_queue;
 	qlen = reqsk_queue_len(queue);
+	// 如果qlen已经超过最大连接数得一般，并且最大尝试次数大于2，
+	// 则需要调整重试次数得阈值max_syn_ack_retries
+	// 如果没有重传过SYN+ACK段的连接请求块数不足所有连接请求块的四分之一，
+	// 则将阈值max_syn_ack_retries减一。如果没有重传过SYN+ACK段的连接请
+	// 求块数不足所有连接请求块的八分之一，则再将阈值max_syn_ack_retries减一，
+	// 直至2为止。
 	if ((qlen << 1) > max(8U, READ_ONCE(sk_listener->sk_max_ack_backlog))) {
 		int young = reqsk_queue_len_young(queue) << 1;
 
@@ -863,9 +878,12 @@ static void reqsk_timer_handler(struct timer_list *t)
 			young <<= 1;
 		}
 	}
+
+	// 决定何时使请求过期以及何时重新发送 SYN-ACK
 	syn_ack_recalc(req, max_syn_ack_retries, READ_ONCE(queue->rskq_defer_accept),
 		       &expire, &resend);
 	req->rsk_ops->syn_ack_timeout(req);
+	// 如果已经过时
 	if (!expire &&
 	    (!resend ||
 	     !inet_rtx_syn_ack(sk_listener, req) ||

@@ -115,6 +115,8 @@ EXPORT_SYMBOL(sk_stream_wait_close);
  * @sk: socket to wait for memory
  * @timeo_p: for how long
  */
+// 在发送数据时，如果分配缓冲区失败，则调用sk_stream_wait_memory()函数来等待。
+// 该函数返回0，表示等待成功；返回非零则为具体的错误码。
 int sk_stream_wait_memory(struct sock *sk, long *timeo_p)
 {
 	int err = 0;

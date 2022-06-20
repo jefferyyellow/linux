@@ -41,6 +41,8 @@ struct iov_iter {
 	size_t iov_offset;
 	size_t count;
 	union {
+		// iovec结构用来描述一个输入/输出数据缓存区，由指向数据缓存区的指针iov_base和表示该缓存区数据长度的iov_len成员组成。
+		// 由此可见，一个报文可以由多个数据缓存区组成
 		const struct iovec *iov;
 		const struct kvec *kvec;
 		const struct bio_vec *bvec;

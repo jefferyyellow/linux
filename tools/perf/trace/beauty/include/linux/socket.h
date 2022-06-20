@@ -48,8 +48,11 @@ struct linger {
  */
 
 struct msghdr {
+	// 指向sock_addr结构的目的地址指针
 	void		*msg_name;	/* ptr to socket address structure */
+	// 是目的地址或源地址的缓存区大小
 	int		msg_namelen;	/* size of socket address structure */
+	// 数据，发送数据或者接受数据的缓存区
 	struct iov_iter	msg_iter;	/* data */
 
 	/*
@@ -57,12 +60,15 @@ struct msghdr {
 	 * recv* side when msg_control_is_user is set, msg_control is the kernel
 	 * buffer used for all other cases.
 	 */
+	// 补充的数据：控制信息，msg_control指向一个附加的数据结构，通常情况下为cmsghdr结构类型的数组。
+	// msg_controllen是整个控制信息考虑对齐后的长度
 	union {
 		void		*msg_control;
 		void __user	*msg_control_user;
 	};
 	bool		msg_control_is_user : 1;
 	__kernel_size_t	msg_controllen;	/* ancillary data buffer length */
+	// 接收标记，查看MSG_PROBE
 	unsigned int	msg_flags;	/* flags on received message */
 	struct kiocb	*msg_iocb;	/* ptr to iocb for async requests */
 };
@@ -90,8 +96,11 @@ struct mmsghdr {
  */
 
 struct cmsghdr {
+	// 控制消息数据长度
 	__kernel_size_t	cmsg_len;	/* data byte count, including hdr */
+	// 控制信息的级别
         int		cmsg_level;	/* originating protocol */
+	// 控制信息的类型
         int		cmsg_type;	/* protocol-specific type */
 };
 

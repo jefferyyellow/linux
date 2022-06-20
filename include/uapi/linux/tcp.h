@@ -22,10 +22,15 @@
 #include <asm/byteorder.h>
 #include <linux/socket.h>
 
+// TCP首部
 struct tcphdr {
+	// 源端口
 	__be16	source;
+	// 目标端口
 	__be16	dest;
+	// 序列号
 	__be32	seq;
+	// 确认序列号
 	__be32	ack_seq;
 #if defined(__LITTLE_ENDIAN_BITFIELD)
 	__u16	res1:4,

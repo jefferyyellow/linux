@@ -149,10 +149,16 @@ static inline bool inet_bound_dev_eq(bool l3mdev_accept, int bound_dev_if,
 }
 
 struct inet_cork {
+	// IPCORK_OPT：标志IP选项信息是否已在cork的opt成员中
+	// IPCORK_ALLFRAG：总是分片(只用于IPv6)
 	unsigned int		flags;
+	// 输出IP数据报的目的地址
 	__be32			addr;
+	// 指向此次发送数据报的IP选项
 	struct ip_options	*opt;
+	// UDP数据报或者原始IP数据报分片大小 
 	unsigned int		fragsize;
+	// 当前发送的数据报的数据长度
 	int			length; /* Total length of all frames */
 	struct dst_entry	*dst;
 	u8			tx_flags;
@@ -166,15 +172,17 @@ struct inet_cork {
 
 struct inet_cork_full {
 	struct inet_cork	base;
+	// 用flowi结构来缓存目的地址、目的端口、源地址和源端口，构造UDP报文时有关信息就取自这里
 	struct flowi		fl;
 };
 
 struct ip_mc_socklist;
 struct ipv6_pinfo;
 struct rtable;
-
+// inet_sock结构是IPv4协议专用的传输控制块，是对sock结构的扩展，在传输控制块的基础属性已经具备的基础上，
+// 进一步提供了IPv4协议专有的一些属性，如TTL，组播列表，IP地址和端口
 /** struct inet_sock - representation of INET sockets
- *
+ * inet_sock 结构：INET套接字的表现
  * @sk - ancestor class
  * @pinet6 - pointer to IPv6 control block
  * @inet_daddr - Foreign IPv4 addr
@@ -196,30 +204,47 @@ struct rtable;
 struct inet_sock {
 	/* sk and pinet6 has to be the first two members of inet_sock */
 	struct sock		sk;
+	// 如果支持IPv6的特性，pinet6是指向IPv6控制块的指针
 #if IS_ENABLED(CONFIG_IPV6)
 	struct ipv6_pinfo	*pinet6;
 #endif
 	/* Socket demultiplex comparisons on incoming packets. */
+	// 目的IP地址
 #define inet_daddr		sk.__sk_common.skc_daddr
+	// 已绑定的本地IP地址,接收数据时，作为条件的一部分查找数据所属的传输控制块
 #define inet_rcv_saddr		sk.__sk_common.skc_rcv_saddr
+	// 目的端口
 #define inet_dport		sk.__sk_common.skc_dport
+	// 主机字节序存储的本地端口
 #define inet_num		sk.__sk_common.skc_num
-
+	// 也标识本地IP地址，但在发送时使用。rcv_saddr和saddr都描述本地IP地址，但用途不同。
 	__be32			inet_saddr;
+	// 单播报文的TTL，默认值为-1，表示使用默认的TTL值。在输出IP数据报时，TTL值首先从这里获取，若没有设置，则从路由缓存的metric中获取。
 	__s16			uc_ttl;
+	// 存放一些IPProto级别的选项值
 	__u16			cmsg_flags;
+	// 指向IP数据报选项的指针
 	struct ip_options_rcu __rcu	*inet_opt;
+	// 由num转换成的网络字节序的源端口
 	__be16			inet_sport;
+	// 一个单调递增的值，用于赋值IP首部的id域
 	__u16			inet_id;
-
+	// 用于设置IP数据报首部的TOS域，参见IP_TOS套接口选项
 	__u8			tos;
 	__u8			min_ttl;
+	// 用于设置多播数据报的TTL
 	__u8			mc_ttl;
+	// 标志套接口是否启用路径MTU发现功能，初始值根据系数控制参数ip_no_pmtu_disc来确定
 	__u8			pmtudisc;
+	// 标识是否允许接收扩展的可靠错误信息
 	__u8			recverr:1,
+	// 标志是否为基于连接的传输控制块，即是否为基于inet_connection_sock结构的传输控制块，如TCP的传输控制块
 				is_icsk:1,
+	// 标识是否允许绑定非主机地址。
 				freebind:1,
+	// 标识IP首部是否由用户数据构建。该标志只用于RAW套接口，一旦设置后，IP选项中的IP_TTL和IP_TOS都将被忽略
 				hdrincl:1,
+	// 标识组播是否发向回路
 				mc_loop:1,
 				transparent:1,
 				mc_all:1,
@@ -233,9 +258,13 @@ struct inet_sock {
 	__u8			rcv_tos;
 	__u8			convert_csum;
 	int			uc_index;
+	// 发送组播报文的网络设备索引号。如果为0，则表示可以从任何网络设备发送。
 	int			mc_index;
+	// 发送组播报文的源地址
 	__be32			mc_addr;
+	// 所在套接口加入的组播地址列表
 	struct ip_mc_socklist __rcu	*mc_list;
+	// UDP或原始IP在每次发送时缓存的一些临时信息。如，UDP数据报或原始IP数据报分片的大小
 	struct inet_cork_full	cork;
 };
 

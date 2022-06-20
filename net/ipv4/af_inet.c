@@ -412,6 +412,7 @@ int inet_release(struct socket *sock)
 			BPF_CGROUP_RUN_PROG_INET_SOCK_RELEASE(sk);
 
 		/* Applications forget to leave groups before exiting */
+		// 离开加入的组播组
 		ip_mc_drop_socket(sk);
 
 		/* If linger is set, we don't return until the close
@@ -422,6 +423,9 @@ int inet_release(struct socket *sock)
 		 * linger..
 		 */
 		timeout = 0;
+		// 如果当前套接字设置了SOCK_LINGER(若有数据待发送则延迟关闭)选项，
+		// 并且当前进程不在退出过程中，则获取延迟关闭的时间
+		// 则意味着如果进程在退出了，那就直接关闭，没有延迟得效果
 		if (sock_flag(sk, SOCK_LINGER) &&
 		    !(current->flags & PF_EXITING))
 			timeout = sk->sk_lingertime;
@@ -439,9 +443,12 @@ int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 	int err;
 
 	/* If the socket has its own bind function then use it. (RAW) */
+	// 如果当前的套接字在传输层接口上有自己的绑定函数，则使用自己的绑定函数。
+	// 目前只有RAW套接字有自己的bind函数，其他的套接字往下执行
 	if (sk->sk_prot->bind) {
 		return sk->sk_prot->bind(sk, uaddr, addr_len);
 	}
+	// 参数得合法性检查
 	if (addr_len < sizeof(struct sockaddr_in))
 		return -EINVAL;
 
@@ -468,6 +475,7 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 	u32 tb_id = RT_TABLE_LOCAL;
 	int err;
 
+	// 对协议栈进行合法性检查
 	if (addr->sin_family != AF_INET) {
 		/* Compatibility games : accept AF_UNSPEC (mapped to AF_INET)
 		 * only if s_addr is INADDR_ANY.
@@ -479,6 +487,7 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 	}
 
 	tb_id = l3mdev_fib_table_by_index(net, sk->sk_bound_dev_if) ? : tb_id;
+	// 得到地址得类型
 	chk_addr_ret = inet_addr_type_table(net, addr->sin_addr.s_addr, tb_id);
 
 	/* Not specified by any standard per-se, however it breaks too
@@ -488,6 +497,7 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 	 * (ie. your servers still start up even if your ISDN link
 	 *  is temporarily down)
 	 */
+	// 根据系统参数结合获得的地址类型进行校验，以便决定是否可以进行地址和端口的绑定
 	err = -EADDRNOTAVAIL;
 	if (!inet_addr_valid_or_nonlocal(net, inet, addr->sin_addr.s_addr,
 	                                 chk_addr_ret))
@@ -495,6 +505,7 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 
 	snum = ntohs(addr->sin_port);
 	err = -EACCES;
+	// 对待绑定的端口进行合法性校验，并判断是否允许绑定小于1024的特权端口
 	if (!(flags & BIND_NO_CAP_NET_BIND_SERVICE) &&
 	    snum && inet_port_requires_bind_service(net, snum) &&
 	    !ns_capable(net->user_ns, CAP_NET_BIND_SERVICE))
@@ -511,15 +522,18 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 		lock_sock(sk);
 
 	/* Check these errors (active socket, double bind). */
+	// 判断是否是重复绑定的情况和已经激活的套接字
 	err = -EINVAL;
 	if (sk->sk_state != TCP_CLOSE || inet->inet_num)
 		goto out_release_sock;
 
+	// 将地址设置到传输控制块中
 	inet->inet_rcv_saddr = inet->inet_saddr = addr->sin_addr.s_addr;
 	if (chk_addr_ret == RTN_MULTICAST || chk_addr_ret == RTN_BROADCAST)
 		inet->inet_saddr = 0;  /* Use device */
 
 	/* Make sure we are allowed to bind here. */
+	// 判断是否允许绑定，调用传输层上的get_port函数，进行具体的传输层的地址绑定
 	if (snum || !(inet->bind_address_no_port ||
 		      (flags & BIND_FORCE_ADDRESS_NO_PORT))) {
 		if (sk->sk_prot->get_port(sk, snum)) {
@@ -538,15 +552,18 @@ int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
 		}
 	}
 
+	// 标识传输控制块已经绑定了本地地址和本地端口
 	if (inet->inet_rcv_saddr)
 		sk->sk_userlocks |= SOCK_BINDADDR_LOCK;
 	if (snum)
 		sk->sk_userlocks |= SOCK_BINDPORT_LOCK;
+	// 设置本地端口，初始化目的地址、目的端口，由于重新进行了绑定，因此需要清除传输控制块的路由缓存项
 	inet->inet_sport = htons(inet->inet_num);
 	inet->inet_daddr = 0;
 	inet->inet_dport = 0;
 	sk_dst_reset(sk);
 	err = 0;
+	// 解锁传输控制块后返回
 out_release_sock:
 	if (flags & BIND_WITH_LOCK)
 		release_sock(sk);
@@ -767,9 +784,10 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 	struct sock *sk		= sock->sk;
 	struct inet_sock *inet	= inet_sk(sk);
 	DECLARE_SOCKADDR(struct sockaddr_in *, sin, uaddr);
-
+	// 返回的地址的类型为IPV4地址族
 	sin->sin_family = AF_INET;
 	lock_sock(sk);
+	// 得到对端的地址和端口，如果传输控制块处于CLOSE或SYN_SENT，由于未连接，因此无法获取信息
 	if (peer) {
 		if (!inet->inet_dport ||
 		    (((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_SYN_SENT)) &&
@@ -781,7 +799,9 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 		sin->sin_addr.s_addr = inet->inet_daddr;
 		BPF_CGROUP_RUN_SA_PROG(sk, (struct sockaddr *)sin,
 				       CGROUP_INET4_GETPEERNAME);
-	} else {
+	} 
+	// 获取本地地址和端口
+	else {
 		__be32 addr = inet->inet_rcv_saddr;
 		if (!addr)
 			addr = inet->inet_saddr;
@@ -792,6 +812,7 @@ int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 	}
 	release_sock(sk);
 	memset(sin->sin_zero, 0, sizeof(sin->sin_zero));
+	// 返回地址信息长度
 	return sizeof(*sin);
 }
 EXPORT_SYMBOL(inet_getname);
@@ -863,13 +884,16 @@ int inet_shutdown(struct socket *sock, int how)
 	/* This should really check to make sure
 	 * the socket is a TCP socket. (WHY AC...)
 	 */
+	// 使how增1是为了利用how变量进行位操作
 	how++; /* maps 0->1 has the advantage of making bit 1 rcvs and
 		       1->2 bit 2 snds.
 		       2->3 */
+	// 如果how的值大于3，则返回EINVAL
 	if ((how & ~SHUTDOWN_MASK) || !how)	/* MAXINT->0 */
 		return -EINVAL;
 
 	lock_sock(sk);
+	// 根据传输控制块的状态重新设置套接口的状态，使正在连接中套接字的状态在完成关闭前只有两种
 	if (sock->state == SS_CONNECTING) {
 		if ((1 << sk->sk_state) &
 		    (TCPF_SYN_SENT | TCPF_SYN_RECV | TCPF_CLOSE))
@@ -878,6 +902,8 @@ int inet_shutdown(struct socket *sock, int how)
 			sock->state = SS_CONNECTED;
 	}
 
+	// 如果传输控制块处于其他状态，则设置shutdown的关闭方式后，调用传输层接口上的shutdown函数
+	// 进行具体传输层的关闭操作
 	switch (sk->sk_state) {
 	case TCP_CLOSE:
 		err = -ENOTCONN;
@@ -894,10 +920,14 @@ int inet_shutdown(struct socket *sock, int how)
 	 * close() in multithreaded environment. It is _not_ a good idea,
 	 * but we have no choice until close() is repaired at VFS level.
 	 */
+	// 如果传输控制块的状态处于TCP_LISTEN状态，则需要判断关闭的方式。如果有接收方向的关闭操作，
+	// 则和SYN_SENT状态出来一样，进行具体传输层的断开连接操作，TCP中为tcp_ddisconnect()
 	case TCP_LISTEN:
 		if (!(how & RCV_SHUTDOWN))
 			break;
 		fallthrough;
+	// 如果传输控制块处于连接状态过程中，则不允许再继续连接，
+	// 因此调用disconnect()，进行具体传输层的断开连接操作
 	case TCP_SYN_SENT:
 		err = sk->sk_prot->disconnect(sk, O_NONBLOCK);
 		sock->state = err ? SS_DISCONNECTING : SS_UNCONNECTED;
@@ -905,6 +935,8 @@ int inet_shutdown(struct socket *sock, int how)
 	}
 
 	/* Wake up anyone sleeping in poll. */
+	// 调用sk_state_change，唤醒在传输控制块的等待队列上的进程。
+	// sk_state_change函数指针在sock_init_data中初始化
 	sk->sk_state_change(sk);
 	release_sock(sk);
 	return err;
@@ -935,6 +967,7 @@ int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	case SIOCDELRT:
 		if (copy_from_user(&rt, p, sizeof(struct rtentry)))
 			return -EFAULT;
+		// 调用ip_rt_ioctl来处理添加和删除路由等操作
 		err = ip_rt_ioctl(net, cmd, &rt);
 		break;
 	case SIOCRTMSG:
@@ -943,6 +976,7 @@ int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	case SIOCDARP:
 	case SIOCGARP:
 	case SIOCSARP:
+		// 调用arp_ioctl来处理创建、修改、获取和删除ARP表项的操作
 		err = arp_ioctl(net, cmd, (void __user *)arg);
 		break;
 	case SIOCGIFADDR:
@@ -965,9 +999,11 @@ int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	case SIOCSIFFLAGS:
 		if (get_user_ifreq(&ifr, NULL, p))
 			return -EFAULT;
+		// 接口操作，调用devinet_ioctl来处理
 		err = devinet_ioctl(net, cmd, &ifr);
 		break;
 	default:
+		// 调用套接口网络接口层中的iotcl接口来处理
 		if (sk->sk_prot->ioctl)
 			err = sk->sk_prot->ioctl(sk, cmd, arg);
 		else
@@ -1119,10 +1155,16 @@ static const struct net_proto_family inet_family_ops = {
 static struct inet_protosw inetsw_array[] =
 {
 	{
+		// 套接口类型为SOCK_STREAM
 		.type =       SOCK_STREAM,
+		// 传输层为TCP协议
 		.protocol =   IPPROTO_TCP,
+		// 定义套接口传输层接口为tcp_prot
 		.prot =       &tcp_prot,
+		// 套接口层为inet_stream_ops
 		.ops =        &inet_stream_ops,
+		// 标志TCP模块在系统运行过程中不能被替换或卸载；TCP套接口为面向连接的套接口
+		// 用于在创建传输控制块时初始化is_icsk成员
 		.flags =      INET_PROTOSW_PERMANENT |
 			      INET_PROTOSW_ICSK,
 	},
@@ -1713,10 +1755,13 @@ static const struct net_protocol igmp_protocol = {
 /* thinking of making this const? Don't.
  * early_demux can change based on sysctl.
  */
+// TCP的net_protocol实例
 static struct net_protocol tcp_protocol = {
 	.early_demux	=	tcp_v4_early_demux,
 	.early_demux_handler =  tcp_v4_early_demux,
+	// tcp_v4_rcv是TCP协议接收处理TCP段的函数
 	.handler	=	tcp_v4_rcv,
+	// tcp_v4_err是TCP协议的错误处理函数
 	.err_handler	=	tcp_v4_err,
 	.no_policy	=	1,
 	.icmp_strict_tag_validation = 1,

@@ -66,6 +66,7 @@ ip_fast_csum(const void *iph, unsigned int ihl)
  * TCP pseudo Header is 12 bytes:
  * SA [4], DA [4], zeroes [1], Proto[1], TCP Seg(hdr+data) Len [2]
  */
+// TCP伪首部的校验和
 static inline __wsum
 csum_tcpudp_nofold(__be32 saddr, __be32 daddr, __u32 len,
 		   __u8 proto, __wsum sum)

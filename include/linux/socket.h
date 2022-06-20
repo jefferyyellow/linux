@@ -291,13 +291,13 @@ struct ucred {
    Added those for 1003.1g not all are supported yet
  */
 
-#define MSG_OOB		1
-#define MSG_PEEK	2
-#define MSG_DONTROUTE	4
+#define MSG_OOB		1	// 接收或发送带外数据
+#define MSG_PEEK	2	// 查看数据，并不从系统缓存区移走数据
+#define MSG_DONTROUTE	4	// 无须路由查找，目的地位于本地子网
 #define MSG_TRYHARD     4       /* Synonym for MSG_DONTROUTE for DECnet */
-#define MSG_CTRUNC	8
-#define MSG_PROBE	0x10	/* Do not send. Only probe path f.e. for MTU */
-#define MSG_TRUNC	0x20
+#define MSG_CTRUNC	8	// 指明由于缓存区空间不足，一些控制数据已被丢弃
+#define MSG_PROBE	0x10	/* Do not send. Only probe path f.e. for MTU */	// 使用这个标记，实际上并不会进行 真正的数据传递，而是进行路径MTU的探测
+#define MSG_TRUNC	0x20	// 只返回包的真实长度，并截短（丢弃）返回长度的数据
 #define MSG_DONTWAIT	0x40	/* Nonblocking io		 */
 #define MSG_EOR         0x80	/* End of record */
 #define MSG_WAITALL	0x100	/* Wait for a full request */

@@ -460,9 +460,11 @@ EXPORT_SYMBOL(tcp_ld_RTO_revert);
  * is probably better.
  *
  */
-
+// skb：接收到的icmp差错报文
+// info：辅助信息，因类型、代码而异。例如：对于目的不可达需要分片的差错报文，info为下一跳的MTU
 int tcp_v4_err(struct sk_buff *skb, u32 info)
 {
+	// 通过从ICMP报文数据中获取的原始TCP首部和IP首部
 	const struct iphdr *iph = (const struct iphdr *)skb->data;
 	struct tcphdr *th = (struct tcphdr *)(skb->data + (iph->ihl << 2));
 	struct tcp_sock *tp;
@@ -474,7 +476,8 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 	u32 seq, snd_una;
 	int err;
 	struct net *net = dev_net(skb->dev);
-
+	// 通过从ICMP报文数据中获取的原始TCP首部中源端口号和IP首部中的源地址，得到发送该TCP报文的传输控制块。
+	// 如果获取失败，则说明ICMP报文有误或该套接口已关闭；
 	sk = __inet_lookup_established(net, &tcp_hashinfo, iph->daddr,
 				       th->dest, iph->saddr, ntohs(th->source),
 				       inet_iif(skb), 0);
@@ -482,6 +485,7 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 		__ICMP_INC_STATS(net, ICMP_MIB_INERRORS);
 		return -ENOENT;
 	}
+	// 如果获取的传输控制块的TCP状态为TIME_WAIT，则说明套接口即将关闭，这两种情况都无需进一步处理。
 	if (sk->sk_state == TCP_TIME_WAIT) {
 		inet_twsk_put(inet_twsk(sk));
 		return 0;
@@ -502,10 +506,12 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 	 * We do take care of PMTU discovery (RFC1191) special case :
 	 * we can receive locally generated ICMP messages while socket is held.
 	 */
+	// 如果此时该传输控制块被用户进程锁定（如用户进程正在调用Send等系统调用），则需累计相关SNMP的统计量。
 	if (sock_owned_by_user(sk)) {
 		if (!(type == ICMP_DEST_UNREACH && code == ICMP_FRAG_NEEDED))
 			__NET_INC_STATS(net, LINUX_MIB_LOCKDROPPEDICMPS);
 	}
+	// 如果传输控制块的TCP状态为CLOSE，则说明该套接口已经关闭，无需进一步处理。
 	if (sk->sk_state == TCP_CLOSE)
 		goto out;
 
@@ -519,6 +525,7 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 
 	tp = tcp_sk(sk);
 	/* XXX (TFO) - tp->snd_una should be ISN (tcp_create_openreq_child() */
+	// 如果传输控制块不在侦听状态，且序号不在已发送未确认的区间内，则ICMP报文异常，无需进一步处理。
 	fastopen = rcu_dereference(tp->fastopen_rsk);
 	snd_una = fastopen ? tcp_rsk(fastopen)->snt_isn : tp->snd_una;
 	if (sk->sk_state != TCP_LISTEN &&
@@ -526,18 +533,22 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 		__NET_INC_STATS(net, LINUX_MIB_OUTOFWINDOWICMPS);
 		goto out;
 	}
-
+	// 根据ICMP类型进行相应处理。
 	switch (type) {
 	case ICMP_REDIRECT:
 		if (!sock_owned_by_user(sk))
 			do_redirect(skb, sk);
 		goto out;
+	// 如果是源端抑制，则不作任何处理
 	case ICMP_SOURCE_QUENCH:
 		/* Just silently ignore these. */
 		goto out;
+	// 如果是参数问题，则错误码为EPROTO
 	case ICMP_PARAMETERPROB:
 		err = EPROTO;
 		break;
+	// 处理目的不可达类型，首先检测代码的合法性，然后根据代码具体处理:如果需要分片而设置了不分片位，则调用do_pmtu_discovery()
+	// 探测路径MTU；其他编码，则获取对应的错误码。
 	case ICMP_DEST_UNREACH:
 		if (code > NR_ICMP_UNREACH)
 			goto out;
@@ -568,6 +579,7 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 		    (code == ICMP_NET_UNREACH || code == ICMP_HOST_UNREACH))
 			tcp_ld_RTO_revert(sk, seq);
 		break;
+	// 如果是超时错误，则错误码为EHOSTUNREACH
 	case ICMP_TIME_EXCEEDED:
 		err = EHOSTUNREACH;
 		break;
@@ -575,6 +587,7 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 		goto out;
 	}
 
+	// 传输控制块的TCP状态为TCP_SYN_SENT和TCP_SYN_RECV的处理。
 	switch (sk->sk_state) {
 	case TCP_SYN_SENT:
 	case TCP_SYN_RECV:
@@ -593,6 +606,8 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 
 			tcp_done(sk);
 		} else {
+			// 如果传输控制块没有被用户进程锁定，则将错误码设置到sk_err，调用该套接字口的错误报告接口函数，
+			// 关闭套接口；否则将错误码设置到sk_err_soft，在这种情况下用户进程可使用SO_ERROR套接口选项获取错误码。
 			sk->sk_err_soft = err;
 		}
 		goto out;
@@ -613,7 +628,8 @@ int tcp_v4_err(struct sk_buff *skb, u32 info)
 	 * Now we are in compliance with RFCs.
 	 *							--ANK (980905)
 	 */
-
+	// 此时如果控制块没有被用户进程锁定，并且允许接收扩展的可靠错误信息，则设置得到的错误码，
+	// 然后通知错误；否则将错误码设置到sk_err_soft。
 	inet = inet_sk(sk);
 	if (!sock_owned_by_user(sk) && inet->recverr) {
 		sk->sk_err = err;
@@ -630,14 +646,16 @@ out:
 
 void __tcp_v4_send_check(struct sk_buff *skb, __be32 saddr, __be32 daddr)
 {
+	// 得到TCP头部
 	struct tcphdr *th = tcp_hdr(skb);
-
+	// 执行伪首部的校验和
 	th->check = ~tcp_v4_check(skb->len, saddr, daddr, 0);
 	skb->csum_start = skb_transport_header(skb) - skb->head;
 	skb->csum_offset = offsetof(struct tcphdr, check);
 }
 
 /* This routine computes an IPv4 TCP checksum. */
+// 基于TCP用户数据的中间累加和（如果存在数据），生成TCP包的校验和。
 void tcp_v4_send_check(struct sock *sk, struct sk_buff *skb)
 {
 	const struct inet_sock *inet = inet_sk(sk);
@@ -2065,9 +2083,13 @@ process:
 
 	sk_incoming_cpu_update(sk);
 
+	// 用于进程加锁传输控制块
 	bh_lock_sock_nested(sk);
 	tcp_segs_in(tcp_sk(sk), skb);
 	ret = 0;
+	// 使用sock_owned_by_user来检测该控制块是否已经被进程锁定
+	// 如果传输控制块未被用户进程上锁，则将TCP段输入到接收队列中，
+	// 否则接收到后备队列中。
 	if (!sock_owned_by_user(sk)) {
 		ret = tcp_v4_do_rcv(sk, skb);
 	} else {
@@ -2200,6 +2222,7 @@ static const struct tcp_sock_af_ops tcp_sock_ipv4_specific = {
 /* NOTE: A lot of things set to zero explicitly by call to
  *       sk_alloc() so need not be done here.
  */
+// 真正完成tcp_sock数据结构实例初始化的地方
 static int tcp_v4_init_sock(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);

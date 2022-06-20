@@ -518,6 +518,7 @@ EXPORT_SYMBOL(reuseport_select_sock);
  *  Returns a socket (with sk_refcnt +1) that should accept the child socket
  *  (or NULL on error).
  */
+// 从SO_REUSEPORT组中选择一个套接字。
 struct sock *reuseport_migrate_sock(struct sock *sk,
 				    struct sock *migrating_sk,
 				    struct sk_buff *skb)

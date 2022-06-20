@@ -365,7 +365,7 @@ static inline bool inet_is_local_reserved_port(struct net *net, unsigned short p
 {
 	return false;
 }
-
+// 绑定端口的校验
 static inline bool inet_port_requires_bind_service(struct net *net, unsigned short port)
 {
 	return port < PROT_SOCK;
