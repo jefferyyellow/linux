@@ -129,7 +129,11 @@ void inet_get_local_port_range(struct net *net, int *low, int *high)
 	} while (read_seqretry(&net->ipv4.ip_local_ports.lock, seq));
 }
 EXPORT_SYMBOL(inet_get_local_port_range);
-
+// 用来在指定端口信息块的传输控制块链表上查找是否存在与绑定传输控制块相冲突的传输控制块。
+// 产生冲突需要满足三个条件：
+// 1.传输控制块链表上的传输控制块与待绑定传输控制块的数据包输出设备的索引号相等，或者其中一个为0.
+// 2.两者之间任何一个都没有复用功能，或链表上的传输控制块不在TCP_LISTEN状态。
+// 3.两者的源地址相等，或两者之中任何一个源地址为0.
 static int inet_csk_bind_conflict(const struct sock *sk,
 				  const struct inet_bind_bucket *tb,
 				  bool relax, bool reuseport_ok)
@@ -160,9 +164,11 @@ static int inet_csk_bind_conflict(const struct sock *sk,
 		if (sk == sk2)
 			continue;
 		bound_dev_if2 = READ_ONCE(sk2->sk_bound_dev_if);
+		// 其中的一个设备的索引号为0或者相等
 		if ((!sk->sk_bound_dev_if ||
 		     !bound_dev_if2 ||
 		     sk->sk_bound_dev_if == bound_dev_if2)) {
+			// 都是可以重用的，但是列表中的不是侦听状态
 			if (reuse && sk2->sk_reuse &&
 			    sk2->sk_state != TCP_LISTEN) {
 				if ((!relax ||
@@ -173,11 +179,15 @@ static int inet_csk_bind_conflict(const struct sock *sk,
 				       uid_eq(uid, sock_i_uid(sk2))))) &&
 				    inet_rcv_saddr_equal(sk, sk2, true))
 					break;
-			} else if (!reuseport_ok ||
+			} 
+			// 设备的索引没有冲突
+			else if (!reuseport_ok ||
 				   !reuseport || !sk2->sk_reuseport ||
 				   !reuseport_cb_ok ||
+				   // 同一个socket，但是列表中的不是TCP_TIME_WAIT，
 				   (sk2->sk_state != TCP_TIME_WAIT &&
 				    !uid_eq(uid, sock_i_uid(sk2)))) {
+				// 两个源地址相等
 				if (inet_rcv_saddr_equal(sk, sk2, true))
 					break;
 			}
@@ -190,6 +200,7 @@ static int inet_csk_bind_conflict(const struct sock *sk,
  * Find an open port number for the socket.  Returns with the
  * inet_bind_hashbucket lock held.
  */
+// 给套接字找到一个开放端口号
 static struct inet_bind_hashbucket *
 inet_csk_find_open_port(struct sock *sk, struct inet_bind_bucket **tb_ret, int *port_ret)
 {
@@ -363,8 +374,13 @@ void inet_csk_update_fastreuse(struct inet_bind_bucket *tb,
  * if snum is zero it means select any available local port.
  * We try to allocate an odd port (and leave even ports for connect())
  */
+// 为给定的sock得到一个本地端口，如果snum为零表示选择一个可用的本地端口
+// 我们尝试分配一个奇数端口（并为 connect() 保留偶数端口）
+// 如果是指定端口号，则需要在已绑定的信息中查找，如果找到，则说明该端口已被使用且不能复用，
+// 则bind失败；如果查找未果，则创建新的bind信息块添加到散列表中完成bind操作。
 int inet_csk_get_port(struct sock *sk, unsigned short snum)
 {
+	// 是否可重用
 	bool reuse = sk->sk_reuse && sk->sk_state != TCP_LISTEN;
 	struct inet_hashinfo *hinfo = sk->sk_prot->h.hashinfo;
 	int ret = 1, port = snum;
@@ -374,7 +390,7 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 	int l3mdev;
 
 	l3mdev = inet_sk_bound_l3mdev(sk);
-
+	// 如果端口为0，找一个可用的端口
 	if (!port) {
 		head = inet_csk_find_open_port(sk, &tb, &port);
 		if (!head)
@@ -383,33 +399,41 @@ int inet_csk_get_port(struct sock *sk, unsigned short snum)
 			goto tb_not_found;
 		goto success;
 	}
+	// 通过hash找到桶位
 	head = &hinfo->bhash[inet_bhashfn(net, port,
 					  hinfo->bhash_size)];
 	spin_lock_bh(&head->lock);
+	// 遍历桶位中的每一个元素
 	inet_bind_bucket_for_each(tb, &head->chain)
 		if (net_eq(ib_net(tb), net) && tb->l3mdev == l3mdev &&
 		    tb->port == port)
+			// 找到了
 			goto tb_found;
 tb_not_found:
+	// 直接在绑定端口的hash表中创建一个
 	tb = inet_bind_bucket_create(hinfo->bind_bucket_cachep,
 				     net, head, port, l3mdev);
 	if (!tb)
 		goto fail_unlock;
 tb_found:
+	// 如果已经有进程在用了
 	if (!hlist_empty(&tb->owners)) {
+		// 强制重用，直接返回成功
 		if (sk->sk_reuse == SK_FORCE_REUSE)
 			goto success;
-
+		// 重用端口
 		if ((tb->fastreuse > 0 && reuse) ||
 		    sk_reuseport_match(tb, sk))
 			goto success;
+		// 用于判断绑定端口是否冲突
 		if (inet_csk_bind_conflict(sk, tb, true, true))
 			goto fail_unlock;
 	}
 success:
 	inet_csk_update_fastreuse(tb, sk);
-
+	// 设置绑定信息
 	if (!inet_csk(sk)->icsk_bind_hash)
+		// 调用inet_bind_hash完成传输控制块与端口的绑定
 		inet_bind_hash(sk, tb, port);
 	WARN_ON(inet_csk(sk)->icsk_bind_hash != tb);
 	ret = 0;
@@ -424,6 +448,7 @@ EXPORT_SYMBOL_GPL(inet_csk_get_port);
  * Wait for an incoming connection, avoid race conditions. This must be called
  * with the socket locked.
  */
+// 用于侦听的传输控制块在指定的时间内等待新的连接,直至建立新的连接，或等待超时，或者收到某个信号等其他情况发生
 static int inet_csk_wait_for_connect(struct sock *sk, long timeo)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -448,20 +473,25 @@ static int inet_csk_wait_for_connect(struct sock *sk, long timeo)
 		prepare_to_wait_exclusive(sk_sleep(sk), &wait,
 					  TASK_INTERRUPTIBLE);
 		release_sock(sk);
+		// 如果为空，睡眠到超时
 		if (reqsk_queue_empty(&icsk->icsk_accept_queue))
 			timeo = schedule_timeout(timeo);
 		sched_annotate_sleep();
 		lock_sock(sk);
 		err = 0;
+		// 醒了以后重新检查请求列表是否为空，如果不为空直接返回
 		if (!reqsk_queue_empty(&icsk->icsk_accept_queue))
 			break;
 		err = -EINVAL;
+		// 如果状态不为侦听状态
 		if (sk->sk_state != TCP_LISTEN)
 			break;
 		err = sock_intr_errno(timeo);
+		// 如果有信号
 		if (signal_pending(current))
 			break;
 		err = -EAGAIN;
+		// 如果时间消耗完，就跳出，没睡好，继续睡
 		if (!timeo)
 			break;
 	}
@@ -472,6 +502,8 @@ static int inet_csk_wait_for_connect(struct sock *sk, long timeo)
 /*
  * This will accept the next outstanding connection.
  */
+// 这将接受下一个未完成的连接。
+// 如果有完成连接的传输控制块，则将其从连接请求容器中取出；如果没有，则根据是否阻塞来决定返回或等待新连接。
 struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -486,25 +518,30 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 	 * and that it has something pending.
 	 */
 	error = -EINVAL;
+	// accept调用只针对侦听状态的套接口，如果该套接口的状态不是LISTEN，则不能进行accept操作
 	if (sk->sk_state != TCP_LISTEN)
 		goto out_err;
 
 	/* Find already established connection */
+	// 是否有已经建立的连接（完成三次握手的连接）
 	if (reqsk_queue_empty(queue)) {
+		// 根据是否阻塞，返回睡眠时间
 		long timeo = sock_rcvtimeo(sk, flags & O_NONBLOCK);
 
 		/* If this is a non blocking socket don't sleep */
+		// 如果非阻塞，套接字就不会睡眠，直接返回
 		error = -EAGAIN;
 		if (!timeo)
 			goto out_err;
-
+		// 否则在该套接口的超时时间内等待新连接，如果超时时间到没有等到新连接，则返回EAGAIN错误码
 		error = inet_csk_wait_for_connect(sk, timeo);
 		if (error)
 			goto out_err;
 	}
+	// 取出已经建立的连接请求
 	req = reqsk_queue_remove(queue, sk);
 	newsk = req->sk;
-
+	// 如果是快速打开侦听套接字，需要等待最后ACK的到来，不能立马释放了
 	if (sk->sk_protocol == IPPROTO_TCP &&
 	    tcp_rsk(req)->tfo_listener) {
 		spin_lock_bh(&queue->fastopenq.lock);
@@ -515,6 +552,9 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 			 * so reqsk_fastopen_remove() will free the req
 			 * when 3WHS finishes (or is aborted).
 			 */
+			// 我们仍在等待3WHS的最终ACK，所以现在无法释放req。相反，我们将req->sk设置为NULL以表示子套接字已被占用，
+			// 因此 reqsk_fastopen_remove() 将在 3WHS 完成（或中止）时释放 req。
+			// 将连接请求的传输控制块置空
 			req->sk = NULL;
 			req = NULL;
 		}
@@ -940,6 +980,7 @@ static void reqsk_queue_hash_req(struct request_sock *req,
 	refcount_set(&req->rsk_refcnt, 2 + 1);
 }
 
+// 启动SYNACK定时器。这便是SYNACK定时器的激活时机，并且将请求加入到ehash中去
 void inet_csk_reqsk_queue_hash_add(struct sock *sk, struct request_sock *req,
 				   unsigned long timeout)
 {
@@ -1054,15 +1095,19 @@ void inet_csk_prepare_forced_close(struct sock *sk)
 }
 EXPORT_SYMBOL(inet_csk_prepare_forced_close);
 
+// 函数inet_csk_listen_start使TCP传输控制块进入侦听状态，
+// 实现侦听的过程：为管理连接请求块的散列表分配存储空间，接着使TCP传输控制块
+// 的状态迁移到LISTEN状态，然后将传输控制块添加到侦听散列表中。
 int inet_csk_listen_start(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct inet_sock *inet = inet_sk(sk);
 	int err = -EADDRINUSE;
-
+	// 为管理完成连接请求的散列表分配存储空间
 	reqsk_queue_alloc(&icsk->icsk_accept_queue);
-
+	// 当前已经建立的连接数清零
 	sk->sk_ack_backlog = 0;
+	// 初始化传输控制块中与延迟发送ACK段有关的控制数据结构
 	inet_csk_delack_init(sk);
 
 	if (sk->sk_txrehash == SOCK_TXREHASH_DEFAULT)
@@ -1073,7 +1118,11 @@ int inet_csk_listen_start(struct sock *sk)
 	 * It is OK, because this socket enters to hash table only
 	 * after validation is complete.
 	 */
+	// 设置套接字的状态为侦听状态
 	inet_sk_state_store(sk, TCP_LISTEN);
+	// 如果没有绑定端口，则进行绑定端口操作，如果已经绑定了端口，则对绑定的端口进行校验。
+	// 绑定或者校验端口成功后，根据端口号在传输控制块中设置网络字节序的端口号成员，然后
+	// 再清除存在传输控制块中的目的路由缓存，最后调用hash接口
 	if (!sk->sk_prot->get_port(sk, inet->inet_num)) {
 		inet->inet_sport = htons(inet->inet_num);
 
@@ -1083,7 +1132,7 @@ int inet_csk_listen_start(struct sock *sk)
 		if (likely(!err))
 			return 0;
 	}
-
+	// 绑定失败将套接字设置为TCP_CLOSE关闭状态
 	inet_sk_set_state(sk, TCP_CLOSE);
 	return err;
 }

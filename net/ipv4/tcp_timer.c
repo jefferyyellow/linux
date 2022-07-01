@@ -767,19 +767,19 @@ static void tcp_keepalive_timer (struct timer_list *t)
 	elapsed = keepalive_time_when(tp);
 
 	/* It is alive without keepalive 8) */
-	// 有发送未确认的包或者还有待发送的包，不是空闲状态
+	// 有发送未确认的段或者发送队列中还有未发送的段，则无需处理，只需要重新设定保活定时器的超时时间。
 	if (tp->packets_out || !tcp_write_queue_empty(sk))
 		goto resched;
-	// 从上次收到包到现在的空闲时间
+	// 获取最近一次收到段到目前为止的时间，即持续空闲时间
 	elapsed = keepalive_time_elapsed(tp);
-	// 连接空闲时间超过设定值
+	// 持续空闲时间超过运行时间
 	if (elapsed >= keepalive_time_when(tp)) {
 		/* If the TCP_USER_TIMEOUT option is enabled, use that
 		 * to determine when to timeout instead.
 		 */
 		// 设置了用户超时，空闲时间达到用户超时时间，已发送过探测
 		// 未设置用户超时，探测次数达到了保活最大探测次数
-		// 则发送rst关闭连接
+		// 则发送rst关闭连接，报告相应错误，关闭相应的传输控制块。
 		if ((icsk->icsk_user_timeout != 0 &&
 		    elapsed >= msecs_to_jiffies(icsk->icsk_user_timeout) &&
 		    icsk->icsk_probes_out > 0) ||
@@ -806,13 +806,14 @@ static void tcp_keepalive_timer (struct timer_list *t)
 		}
 	} else {
 		/* It is tp->rcv_tstamp + keepalive_time_when(tp) */
+		// 如果持续空闲时间还未达到允许的持续空闲时间，则重新计算下次激活保活定时器的时间。
 		elapsed = keepalive_time_when(tp) - elapsed;
 	}
-
+	// 回收缓存。
 	sk_mem_reclaim(sk);
 
 resched:
-	// 重置定时器
+	// 重置定时器下次超时时间
 	inet_csk_reset_keepalive_timer (sk, elapsed);
 	goto out;
 

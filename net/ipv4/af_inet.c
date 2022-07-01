@@ -190,6 +190,7 @@ static int inet_autobind(struct sock *sk)
 /*
  *	Move a socket into listening state.
  */
+// 将一个Socket改变成侦听状态
 int inet_listen(struct socket *sock, int backlog)
 {
 	struct sock *sk = sock->sk;
@@ -199,10 +200,13 @@ int inet_listen(struct socket *sock, int backlog)
 	lock_sock(sk);
 
 	err = -EINVAL;
+	// 如果套接字的状态不是SS_UNCONNECTED，或者套接字的类型不是SOCK_STREAM，就不能侦听
 	if (sock->state != SS_UNCONNECTED || sock->type != SOCK_STREAM)
 		goto out;
 
 	old_state = sk->sk_state;
+	// 进行listen调用的传输控制块的状态。如果该传输控制块不在TCP_CLOSE或TCP_LISTEN状态，
+	// 则不能进行侦听操作，返回相应的错误码。
 	if (!((1 << old_state) & (TCPF_CLOSE | TCPF_LISTEN)))
 		goto out;
 
@@ -210,6 +214,7 @@ int inet_listen(struct socket *sock, int backlog)
 	/* Really, if the socket is already in listen state
 	 * we can only allow the backlog to be adjusted.
 	 */
+	// 真的，如果套接字已经在侦听状态了，我们只能允许backlog的调整
 	if (old_state != TCP_LISTEN) {
 		/* Enable TFO w/o requiring TCP_FASTOPEN socket option.
 		 * Note that only TCP sockets (SOCK_STREAM) will reach here.
@@ -217,6 +222,9 @@ int inet_listen(struct socket *sock, int backlog)
 		 * because the socket was in TCP_LISTEN state previously but
 		 * was shutdown() rather than close().
 		 */
+		// 启用TFO w/o需要TCP_FASTOPEN套接字选项。注意只有TCP套接字能到这里。
+		// fastopen套接字的backlog可能已经通过套接字选项设置，因为该套接字以前的状态是TCP_LISTEN
+		// 它是通过shutdown而不是close关闭
 		tcp_fastopen = sock_net(sk)->ipv4.sysctl_tcp_fastopen;
 		if ((tcp_fastopen & TFO_SERVER_WO_SOCKOPT1) &&
 		    (tcp_fastopen & TFO_SERVER_ENABLE) &&
@@ -224,7 +232,7 @@ int inet_listen(struct socket *sock, int backlog)
 			fastopen_queue_tune(sk, backlog);
 			tcp_fastopen_init_key_once(sock_net(sk));
 		}
-
+		// 函数inet_csk_listen_start使TCP传输控制块进入侦听状态
 		err = inet_csk_listen_start(sk);
 		if (err)
 			goto out;
@@ -747,12 +755,13 @@ EXPORT_SYMBOL(inet_stream_connect);
 /*
  *	Accept a pending connection. The TCP layer now gives BSD semantics.
  */
-
+// 接受一个三次握手已经完成的连接。TCP层现在完成了BSD的语义
 int inet_accept(struct socket *sock, struct socket *newsock, int flags,
 		bool kern)
 {
 	struct sock *sk1 = sock->sk;
 	int err = -EINVAL;
+	// 调用accpet的传输接口实现函数inet_csk_accept获取已经完成连接（被接受）的传输控制块，称之为子传输控制块。
 	struct sock *sk2 = sk1->sk_prot->accept(sk1, flags, &err, kern);
 
 	if (!sk2)
@@ -764,9 +773,9 @@ int inet_accept(struct socket *sock, struct socket *newsock, int flags,
 	WARN_ON(!((1 << sk2->sk_state) &
 		  (TCPF_ESTABLISHED | TCPF_SYN_RECV |
 		  TCPF_CLOSE_WAIT | TCPF_CLOSE)));
-
+	// 需调用sock_graft把子套接口和传输控制块关联起来以便这两者之间相互索引
 	sock_graft(sk2, newsock);
-
+	
 	newsock->state = SS_CONNECTED;
 	err = 0;
 	release_sock(sk2);

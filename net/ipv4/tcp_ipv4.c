@@ -100,7 +100,8 @@ static u32 tcp_v4_init_seq(const struct sk_buff *skb)
 			      tcp_hdr(skb)->dest,
 			      tcp_hdr(skb)->source);
 }
-
+// 于IPv4而言，函数tcp_v4_init_ts_off将初始化服务端的TS偏移值，
+// 但是如果sysctl_tcp_timestamps不等于1，偏移值赋值为零
 static u32 tcp_v4_init_ts_off(const struct net *net, const struct sk_buff *skb)
 {
 	return secure_tcp_ts_off(net, ip_hdr(skb)->daddr, ip_hdr(skb)->saddr);
@@ -1476,6 +1477,7 @@ const struct tcp_request_sock_ops tcp_request_sock_ipv4_ops = {
 	.send_synack	=	tcp_v4_send_synack,
 };
 
+// 服务器用来处理客户端连接请求的函数
 int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 {
 	/* Never answer to SYNs send to broadcast or multicast */
@@ -1653,6 +1655,9 @@ INDIRECT_CALLABLE_DECLARE(struct dst_entry *ipv4_dst_check(struct dst_entry *,
  * This is because we cannot sleep with the original spinlock
  * held.
  */
+// 传输控制块接收处理的段都由tcp_v4_do_rcv处理，在该函数中再根据不同的状态由不同的函数处理：
+// TCP_ESTABLISHED状态的处理函数为tcp_rcv_established，TCP_LISTEN状态下出现syn_cookies的情况下的处理函数为tcp_child_process
+// 其他状态的处理函数为tcp_rcv_state_process
 int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 {
 	enum skb_drop_reason reason;
@@ -3044,7 +3049,7 @@ struct proto tcp_prot = {
 	.disconnect		= tcp_disconnect,
 	.accept			= inet_csk_accept,
 	.ioctl			= tcp_ioctl,
-	.init			= tcp_v4_init_sock,
+	.init			= ,
 	.destroy		= tcp_v4_destroy_sock,
 	.shutdown		= tcp_shutdown,
 	.setsockopt		= tcp_setsockopt,

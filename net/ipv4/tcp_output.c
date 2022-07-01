@@ -2599,6 +2599,7 @@ void tcp_chrono_stop(struct sock *sk, const enum tcp_chrono type)
  * Returns true, if no segments are in flight and we have queued segments,
  * but cannot send anything now because of SWS or another problem.
  */
+// 如果没有分段在传送并且我们有排队的段，但是现在由于滑动窗口或者另外的问题，我们不能发送任何数据，就会返回true.
 static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			   int push_one, gfp_t gfp)
 {
@@ -2874,7 +2875,7 @@ void __tcp_push_pending_frames(struct sock *sk, unsigned int cur_mss,
 	 */
 	if (unlikely(sk->sk_state == TCP_CLOSE))
 		return;
-
+	// 如果写入失败，得考虑启动持续定时器去探测窗口
 	if (tcp_write_xmit(sk, cur_mss, nonagle, 0,
 			   sk_gfp_mask(sk, GFP_ATOMIC)))
 		tcp_check_probe_timer(sk);
@@ -4024,20 +4025,25 @@ void tcp_send_window_probe(struct sock *sk)
 }
 
 /* Initiate keepalive or window probe from timer. */
+// 从计时器启动keepalive或窗口探测
 int tcp_write_wakeup(struct sock *sk, int mib)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct sk_buff *skb;
-
+	// 如果传输控制块处于关闭状态，直接返回失败
 	if (sk->sk_state == TCP_CLOSE)
 		return -1;
-
+	// 得到发送队列
 	skb = tcp_send_head(sk);
+	// 如果发送队列中有段需要发送，并且最先待发送得段至少有一部分在对端接收窗口内，
+	// 那么可以直接利用该待发送得段来发送持续探测段。
 	if (skb && before(TCP_SKB_CB(skb)->seq, tcp_wnd_end(tp))) {
 		int err;
+		// 获取当前的MSS以及待分段的段长。分段得到的新段必须在对方接收窗口内，待分段的段长
+		// 初始化为tp->snd_una + tp->snd_wnd -SKB.seq;
 		unsigned int mss = tcp_current_mss(sk);
 		unsigned int seg_size = tcp_wnd_end(tp) - TCP_SKB_CB(skb)->seq;
-
+		// 如果该段的序号已经大于pushed_seq，则需要更新pushed_seq
 		if (before(tp->pushed_seq, TCP_SKB_CB(skb)->end_seq))
 			tp->pushed_seq = TCP_SKB_CB(skb)->end_seq;
 
@@ -4045,6 +4051,8 @@ int tcp_write_wakeup(struct sock *sk, int mib)
 		 * but the window size is != 0
 		 * must have been a result SWS avoidance ( sender )
 		 */
+		// 如果分段的段长大于剩余等待发送数据，或者段长大于当前MSS，则对该段进行分段，
+		// 分段段长取待分段段长与当前MSS两者中的最小值，以保证只发送一个段到对方。
 		if (seg_size < TCP_SKB_CB(skb)->end_seq - TCP_SKB_CB(skb)->seq ||
 		    skb->len > mss) {
 			seg_size = min(seg_size, mss);
@@ -4055,12 +4063,16 @@ int tcp_write_wakeup(struct sock *sk, int mib)
 		} else if (!tcp_skb_pcount(skb))
 			tcp_set_skb_tso_segs(skb, mss);
 
+		// 将探测段发送出去，如果发送成功，则更新发送队首等标志。
 		TCP_SKB_CB(skb)->tcp_flags |= TCPHDR_PSH;
 		err = tcp_transmit_skb(sk, skb, 1, GFP_ATOMIC);
 		if (!err)
 			tcp_event_new_data_sent(sk, skb);
 		return err;
-	} else {
+	} 
+	// 如果发送队列为空，则构造并发送一个序号已确认、长度为零的段给对端。
+	// 如果处于紧急模式，则多发送一个序号为SND.una的段给对端
+	else {
 		if (between(tp->snd_up, tp->snd_una + 1, tp->snd_una + 0xFFFF))
 			tcp_xmit_probe_skb(sk, 1, mib);
 		return tcp_xmit_probe_skb(sk, 0, mib);

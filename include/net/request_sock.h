@@ -50,6 +50,9 @@ struct saved_syn {
 
 /* struct request_sock - mini sock to represent a connection request
  */
+// mini sock 代表一个连接请求
+// request_sock用来构成inet_request_sock结构，该结构主要描述对端的MSS、本端的
+// 接收窗口大小以及控制连接操作的信息，比如超时时间等。
 struct request_sock {
 	struct sock_common		__req_common;
 #define rsk_refcnt			__req_common.skc_refcnt
@@ -57,19 +60,26 @@ struct request_sock {
 #define rsk_listener			__req_common.skc_listener
 #define rsk_window_clamp		__req_common.skc_window_clamp
 #define rsk_rcv_wnd			__req_common.skc_rcv_wnd
-
+	// 用来将request_sock构成链表
 	struct request_sock		*dl_next;
+	// 客户端连接请求段中通告的MSS，如果无通告，则为初始值，即RFC中建议的536。
 	u16				mss;
+	// 发送SYN+ACK段的次数，在达到系统设定的上限时，取消连接操作。
 	u8				num_retrans; /* number of retransmits */
 	u8				syncookie:1; /* syncookie: encode tcpopts in timestamp */
 	u8				num_timeout:7; /* number of timeouts */
 	u32				ts_recent;
 	struct timer_list		rsk_timer;
+	// 处理连接请求的函数指针表，TCP中指向tcp_request_sock_ops
 	const struct request_sock_ops	*rsk_ops;
+	// 指向对应状态的传输控制块。在连接建立之前无效，三次握手后会创建对应的传输控制块，而此时
+	// 连接请求块也完成了历史使命，调用accept即将该请求块取走并释放。
 	struct sock			*sk;
 	struct saved_syn		*saved_syn;
 	u32				secid;
+	// 安全ID
 	u32				peer_secid;
+	// 
 	u32				timeout;
 };
 
@@ -177,11 +187,14 @@ struct request_sock_queue {
 	u8			rskq_defer_accept;
 
 	u32			synflood_warned;
-	atomic_t		qlen;
-	atomic_t		young;
-
+	atomic_t		qlen;	// 半连接队列长度计数
+	// 当前未重传过SYN+ACK段的请求块数目。如果每次建立连接都很顺利，三次握手的段没有重传，
+	// 则young和qlen是一致的，有SYN+ACK段重传时会衰减。
+	atomic_t		young;	
+	// 全连接列表的头(head)和尾(tail)
 	struct request_sock	*rskq_accept_head;
 	struct request_sock	*rskq_accept_tail;
+
 	struct fastopen_queue	fastopenq;  /* Check max_qlen != 0 to determine
 					     * if TFO is enabled.
 					     */
@@ -191,12 +204,13 @@ void reqsk_queue_alloc(struct request_sock_queue *queue);
 
 void reqsk_fastopen_remove(struct sock *sk, struct request_sock *req,
 			   bool reset);
-
+// 请求列表是否为空
 static inline bool reqsk_queue_empty(const struct request_sock_queue *queue)
 {
 	return READ_ONCE(queue->rskq_accept_head) == NULL;
 }
 
+// 从请求列表中取出表头
 static inline struct request_sock *reqsk_queue_remove(struct request_sock_queue *queue,
 						      struct sock *parent)
 {
@@ -213,7 +227,7 @@ static inline struct request_sock *reqsk_queue_remove(struct request_sock_queue 
 	spin_unlock_bh(&queue->rskq_lock);
 	return req;
 }
-
+// 减少半连接列表的计数
 static inline void reqsk_queue_removed(struct request_sock_queue *queue,
 				       const struct request_sock *req)
 {

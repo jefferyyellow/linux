@@ -139,8 +139,10 @@ struct inet_hashinfo {
 	 */
 	// 这仅适用于具有完整标识的套接字。这里的套接字将始终没有通配符，并且将具有以下不变量：
 	// 用来管理TCP_ESTABLISHED到TCP_CLOSE（不含）之间状态的传输控制块的散列表。
-	struct inet_ehash_bucket	*ehash;
+	struct inet_ehash_bucket	*ehash; // 注意，不只是established状态的散列表
+	// ehash的锁
 	spinlock_t			*ehash_locks;
+	// 用于计算hash桶位
 	unsigned int			ehash_mask;
 	unsigned int			ehash_locks_mask;
 
@@ -150,6 +152,7 @@ struct inet_hashinfo {
 	// 我们确实需要一个本地绑定TCP哈希表以及其他用于快速绑定/连接的哈希表。
 	// 大小为bhash_size的bhash散列表主要用来存储已绑定端口的信息，其类型为inet_bind_hashbucket
 	struct kmem_cache		*bind_bucket_cachep;
+	// 绑定端口的Hash
 	struct inet_bind_hashbucket	*bhash;
 	unsigned int			bhash_size;
 

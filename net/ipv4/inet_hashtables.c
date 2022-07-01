@@ -61,6 +61,8 @@ static u32 sk_ehashfn(const struct sock *sk)
  * Allocate and initialize a new local port bind bucket.
  * The bindhash mutex for snum's hash chain must be held here.
  */
+// 分配并初始化一个新的本地端口绑定桶,
+// 用来在bind_bucket_cachep高速缓存中分配bind端口实例，设置后将其添加到inet_bind_hashbucket散列表中。
 struct inet_bind_bucket *inet_bind_bucket_create(struct kmem_cache *cachep,
 						 struct net *net,
 						 struct inet_bind_hashbucket *head,
@@ -84,6 +86,7 @@ struct inet_bind_bucket *inet_bind_bucket_create(struct kmem_cache *cachep,
 /*
  * Caller must hold hashbucket lock for this tb with local BH disabled
  */
+// 将指定的bind端口实例从inet_bind_hashbucket散列表中删除并释放。
 void inet_bind_bucket_destroy(struct kmem_cache *cachep, struct inet_bind_bucket *tb)
 {
 	if (hlist_empty(&tb->owners)) {
@@ -92,11 +95,15 @@ void inet_bind_bucket_destroy(struct kmem_cache *cachep, struct inet_bind_bucket
 	}
 }
 
+// 传输控制块与端口的绑定
 void inet_bind_hash(struct sock *sk, struct inet_bind_bucket *tb,
 		    const unsigned short snum)
 {
+	// 设置传输控制块的端口
 	inet_sk(sk)->inet_num = snum;
+	// 将该传输控制块加入到端口信息块的传输控制链表中
 	sk_add_bind_node(sk, &tb->owners);
+	// 设置传输控制块的端口信息
 	inet_csk(sk)->icsk_bind_hash = tb;
 }
 
@@ -516,6 +523,10 @@ static bool inet_ehash_lookup_by_sk(struct sock *sk,
  * If an existing socket already exists, socket sk is not inserted,
  * and sets found_dup_sk parameter to true.
  */
+// 一个套接字插入 ehash，并最终删除另一个（另一个可以是 SYN_RECV 或 TIMEWAIT）
+// 如果已有的socket已经存在，则不插入socket sk，并将found_dup_sk 参数设置为true。
+// 此时这点 在老内核 新内核上有一些区别！！！！   
+// 也就是半链接会插入到 ehash中，不会像以前那样会插入到icsk_accept_queue listen的accept队列中
 bool inet_ehash_insert(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 {
 	struct inet_hashinfo *hashinfo = sk->sk_prot->h.hashinfo;

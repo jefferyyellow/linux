@@ -142,18 +142,23 @@ static inline void tcp_clear_options(struct tcp_options_received *rx_opt)
 #define TCP_NUM_SACKS 4
 
 struct tcp_request_sock_ops;
-
+// TCP连接请求块，用来保存双方的初始序号、双方的端口及IP地址、TCP选项，
+// 如是否支持窗口扩大因子、是否支持SACK等，并控制连接的建立。
 struct tcp_request_sock {
+	// 最前部由inet_request_sock扩展而来
 	struct inet_request_sock 	req;
 	const struct tcp_request_sock_ops *af_specific;
 	u64				snt_synack; /* first SYNACK sent time */
+	// 是否为快速打开listener
 	bool				tfo_listener;
 	bool				is_mptcp;
 #if IS_ENABLED(CONFIG_MPTCP)
 	bool				drop_req;
 #endif
 	u32				txhash;
+	// 客户端的初始序号，接收到客户端连接请求SYN段的序号
 	u32				rcv_isn;
+	// 服务端的初始序号，服务端发送SYN+ACK段的序号。
 	u32				snt_isn;
 	u32				ts_off;
 	u32				last_oow_ack_time; /* last SYNACK */

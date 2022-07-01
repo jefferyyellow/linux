@@ -66,30 +66,46 @@ struct ip_options_data {
 };
 
 struct inet_request_sock {
+	// 前部由request_sock结构扩展而来
 	struct request_sock	req;
+	// 绑定的本地ipv4地址 
 #define ir_loc_addr		req.__req_common.skc_rcv_saddr
+	// 外部ipv4地址
 #define ir_rmt_addr		req.__req_common.skc_daddr
+	// 本地端口号
 #define ir_num			req.__req_common.skc_num
+	// 目的端口号
 #define ir_rmt_port		req.__req_common.skc_dport
+	// 外部ipv6地址
 #define ir_v6_rmt_addr		req.__req_common.skc_v6_daddr
+	// 绑定的本地ipv4地址 
 #define ir_v6_loc_addr		req.__req_common.skc_v6_rcv_saddr
 #define ir_iif			req.__req_common.skc_bound_dev_if
 #define ir_cookie		req.__req_common.skc_cookie
 #define ireq_net		req.__req_common.skc_net
 #define ireq_state		req.__req_common.skc_state
 #define ireq_family		req.__req_common.skc_family
-
+	// 发送窗口扩大因子
 	u16			snd_wscale : 4,
+	// 接收窗口扩大因子
 				rcv_wscale : 4,
+	// 标识TCP段是否存在TCP时间戳选项
 				tstamp_ok  : 1,
+	// 标识是否支持SACK，支持则该选项能出现在SYN段中
 				sack_ok	   : 1,
+	// 标识是否支持窗口扩大因子，如果支持该选项也只能出现在SYN段中
 				wscale_ok  : 1,
+	// 标识是否启用了显式拥塞通知
 				ecn_ok	   : 1,
+	// 标识已接收到第三次握手的ACK段，但是由于服务器繁忙或其他原因导致未能建立起连接，
+	// 此时可根据该标志重新给客户端发送SYN+ACK段，再次进行连接的建立。该标志的设置同时
+	// 受tcp_abort_on_overflow的控制。
 				acked	   : 1,
 				no_srccheck: 1,
 				smc_ok	   : 1;
 	u32                     ir_mark;
 	union {
+		// 指向IP选项数据结构实例。
 		struct ip_options_rcu __rcu	*ireq_opt;
 #if IS_ENABLED(CONFIG_IPV6)
 		struct {

@@ -30,7 +30,7 @@
  * and it will increase in proportion to the memory of machine.
  * Note : Dont forget somaxconn that may limit backlog too.
  */
-
+// 请求列表的初始化
 void reqsk_queue_alloc(struct request_sock_queue *queue)
 {
 	spin_lock_init(&queue->rskq_lock);

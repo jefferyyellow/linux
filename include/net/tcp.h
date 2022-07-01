@@ -2069,9 +2069,11 @@ struct tcp_sock_af_ops {
 				     int optlen);
 #endif
 };
-
+// 处理TCP连接请求的函数指针表
+// 该结构作为request结构的一个成员，可以很方便地通过连接请求块索引到这些接口。
 struct tcp_request_sock_ops {
-	u16 mss_clamp;
+	u16 
+	;
 #ifdef CONFIG_TCP_MD5SIG
 	struct tcp_md5sig_key *(*req_md5_lookup)(const struct sock *sk,
 						 const struct sock *addr_sk);
@@ -2084,12 +2086,16 @@ struct tcp_request_sock_ops {
 	__u32 (*cookie_init_seq)(const struct sk_buff *skb,
 				 __u16 *mss);
 #endif
+	// 查找到客户端的路由
 	struct dst_entry *(*route_req)(const struct sock *sk,
 				       struct sk_buff *skb,
 				       struct flowi *fl,
 				       struct request_sock *req);
+	// 初始化序列号，序列号的计算与报⽂的源/⽬的地址，以及源和⽬的端⼝号相关
 	u32 (*init_seq)(const struct sk_buff *skb);
+	// 将初始化服务端的TS偏移值
 	u32 (*init_ts_off)(const struct net *net, const struct sk_buff *skb);
+	// 发送SYN+ACK段的函数指针
 	int (*send_synack)(const struct sock *sk, struct dst_entry *dst,
 			   struct flowi *fl, struct request_sock *req,
 			   struct tcp_fastopen_cookie *foc,

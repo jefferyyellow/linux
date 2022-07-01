@@ -96,7 +96,7 @@ struct inet_connection_sock {
 	// 基础结构，一层层的扩展
 	struct inet_sock	  icsk_inet;
 	// TCP传输层收到客户端的连接请求以后，会创建一个客户端套接字存放到icsk_accept_queue容器中，
-	// 等待应用程序调用accept进行读取
+	// 等待应用程序调用accept进行读取，注意这个是连接完成的列表（完成了3次握手的）
 	struct request_sock_queue icsk_accept_queue;
 	// 指向与之绑定的本地端口信息，在绑定过程中被设置
 	struct inet_bind_bucket	  *icsk_bind_hash;

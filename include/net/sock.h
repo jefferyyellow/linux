@@ -173,7 +173,9 @@ struct sock_common {
 	union {
 		__addrpair	skc_addrpair;
 		struct {
+			// 外部ipv4地址 
 			__be32	skc_daddr;
+			// 绑定的本地ipv4地址  
 			__be32	skc_rcv_saddr;
 		};
 	};
@@ -187,7 +189,9 @@ struct sock_common {
 	union {
 		__portpair	skc_portpair;
 		struct {
+			// 目的端口号 
 			__be16	skc_dport;
+			// 本地端口号 
 			__u16	skc_num;
 		};
 	};
@@ -2180,12 +2184,15 @@ static inline void sock_orphan(struct sock *sk)
 	write_unlock_bh(&sk->sk_callback_lock);
 }
 
+// 将套接口和传输控制块关联起来，
 static inline void sock_graft(struct sock *sk, struct socket *parent)
 {
 	WARN_ON(parent->sk);
 	write_lock_bh(&sk->sk_callback_lock);
 	rcu_assign_pointer(sk->sk_wq, &parent->wq);
+	// 设置套接字的传输控制块
 	parent->sk = sk;
+	// 设置传输控制块对应的套接字
 	sk_set_socket(sk, parent);
 	sk->sk_uid = SOCK_INODE(parent)->i_uid;
 	security_sock_graft(sk, parent);
