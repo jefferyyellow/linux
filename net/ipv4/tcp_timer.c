@@ -383,7 +383,8 @@ static void tcp_probe_timer(struct sock *sk)
 	struct sk_buff *skb = tcp_send_head(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	int max_probes;
-
+	// 由于持续定时器会周期性的发送探测段，因此如果存在发送出去但未被确认的段，
+	// 或者在发送队列还有待发送的段，则无需另外组织探测段了，将icsk_probes_out清零后返回。
 	if (tp->packets_out || !skb) {
 		icsk->icsk_probes_out = 0;
 		icsk->icsk_probes_tstamp = 0;
@@ -404,22 +405,30 @@ static void tcp_probe_timer(struct sock *sk)
 		 (s32)(tcp_jiffies32 - icsk->icsk_probes_tstamp) >=
 		 msecs_to_jiffies(icsk->icsk_user_timeout))
 		goto abort;
-
+	// 获取确定断开连接前持续定时器周期性发送TCP段的数目上限，用于持续定时器发出段数量的检测。
 	max_probes = sock_net(sk)->ipv4.sysctl_tcp_retries2;
+	// 处理连接已经断开，套接口即将关闭的情况
 	if (sock_flag(sk, SOCK_DEAD)) {
+		// TCP协议规定RTT的最大值为120s(TCP_RTO_MAX)，因此可以通过将指数退避算法得出的超时时间
+		// 与RTT最大值相比，来判断是否需要给对方发送RST。
 		const bool alive = inet_csk_rto_backoff(icsk, TCP_RTO_MAX) < TCP_RTO_MAX;
-
+		// 如果连接断开，套接口即将关闭，则获取在关闭本端TCP连接前重试次数的上限。
 		max_probes = tcp_orphan_retries(sk, alive);
+		
 		if (!alive && icsk->icsk_backoff >= max_probes)
 			goto abort;
+		// 释放资源，如果该套接字在释放过程中被关闭，则无需再发送持续探测段了。
 		if (tcp_out_of_resources(sk, true))
 			return;
 	}
-
+	// 发送持续探测段。
+	// 如果持续定时器或保活定时器周期性发送出但未被确认的TCP段数目达到上限，
+	// 则作出错处理，同时关闭TCP套接口
 	if (icsk->icsk_probes_out >= max_probes) {
 abort:		tcp_write_err(sk);
 	} else {
 		/* Only send another probe if we didn't close things up. */
+		// 或者，再一次发送持续探测段。
 		tcp_send_probe0(sk);
 	}
 }

@@ -4082,6 +4082,7 @@ int tcp_write_wakeup(struct sock *sk, int mib)
 /* A window probe timeout has occurred.  If window is not closed send
  * a partial packet else a zero probe.
  */
+// 发生窗口探测超时。 如果窗口未关闭，则发送部分数据包，否则进行零探测。
 void tcp_send_probe0(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);

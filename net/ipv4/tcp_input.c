@@ -3432,8 +3432,10 @@ static void tcp_ack_probe(struct sock *sk)
 	const struct tcp_sock *tp = tcp_sk(sk);
 
 	/* Was it a usable window open? */
+	// 如果没有待发送的数据，则不需要管了
 	if (!head)
 		return;
+	// 如果对方的接收窗口没有关闭，则需要清除持续定时器中指数退避算法指数，停止持续定时器；
 	if (!after(TCP_SKB_CB(head)->end_seq, tcp_wnd_end(tp))) {
 		icsk->icsk_backoff = 0;
 		icsk->icsk_probes_tstamp = 0;
@@ -3441,7 +3443,9 @@ static void tcp_ack_probe(struct sock *sk)
 		/* Socket must be waked up by subsequent tcp_data_snd_check().
 		 * This function is not for random using!
 		 */
-	} else {
+	} 
+	// 否则开启持续定时器
+	else {
 		unsigned long when = tcp_probe0_when(sk, TCP_RTO_MAX);
 
 		when = tcp_clamp_probe0_to_user_timeout(sk, when);
@@ -3737,6 +3741,7 @@ static u32 tcp_newly_delivered(struct sock *sk, u32 prior_delivered, int flag)
 }
 
 /* This routine deals with incoming acks, but not outgoing ones. */
+// 该函数处理传入的ack，但是不处理传出的
 static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3748,6 +3753,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	u32 ack_seq = TCP_SKB_CB(skb)->seq;
 	u32 ack = TCP_SKB_CB(skb)->ack_seq;
 	int num_dupack = 0;
+	// 得到已发送出未确认的段
 	int prior_packets = tp->packets_out;
 	u32 delivered = tp->delivered;
 	u32 lost = tp->lost;
@@ -3855,8 +3861,10 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	 * log. Something worked...
 	 */
 	sk->sk_err_soft = 0;
+	// 由于接收到对端得ACK，因此将TCP保活探测段未确认数清零，说明此时TCP连接是正常的。
 	icsk->icsk_probes_out = 0;
 	tp->rcv_tstamp = tcp_jiffies32;
+	// 是否有已发送出未确认的段，没有则跳转到no_queue处理
 	if (!prior_packets)
 		goto no_queue;
 
@@ -3898,6 +3906,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 
 no_queue:
 	/* If data was DSACKed, see if we can undo a cwnd reduction. */
+	// 如果数据被DSACKed，看看我们是否可以撤消 cwnd 缩减。
 	if (flag & FLAG_DSACKING_ACK) {
 		tcp_fastretrans_alert(sk, prior_snd_una, num_dupack, &flag,
 				      &rexmit);
@@ -6422,11 +6431,13 @@ static void tcp_rcv_synrecv_state_fastopen(struct sock *sk)
  *	It's called from both tcp_v4_rcv and tcp_v6_rcv and should be
  *	address independent.
  */
-
+// sk：处理TCP段的传输控制块
+// skb：接收到的TCP段
 int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
+	// 得到指向TCP段的TCP首部的指针
 	const struct tcphdr *th = tcp_hdr(skb);
 	struct request_sock *req;
 	int queued = 0;
@@ -6438,14 +6449,17 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		SKB_DR_SET(reason, TCP_CLOSE);
 		goto discard;
 
+	// 侦听套接字接收处理的过程
 	case TCP_LISTEN:
+		// 如果是ACK段，此时连接尚未建立，因此返回1，在调用tcp_rcv_state_process函数中会给对方发送RST段；
 		if (th->ack)
 			return 1;
-
+		// 如果接收的是RST段，则丢弃
 		if (th->rst) {
 			SKB_DR_SET(reason, TCP_RESET);
 			goto discard;
 		}
+		// 处理SYN段
 		if (th->syn) {
 			if (th->fin) {
 				SKB_DR_SET(reason, TCP_FLAGS);
@@ -6456,6 +6470,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			 */
 			rcu_read_lock();
 			local_bh_disable();
+			// 调用连接请求处理函数，TCP为tcp_v4_conn_request，接收处理
 			acceptable = icsk->icsk_af_ops->conn_request(sk, skb) >= 0;
 			local_bh_enable();
 			rcu_read_unlock();
@@ -6901,35 +6916,39 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	 * limitations, they conserve resources and peer is
 	 * evidently real one.
 	 */
+	// 启用tcp_syncookies，或者半连接队列已满就设置want_cookie
 	if ((net->ipv4.sysctl_tcp_syncookies == 2 ||
 	     inet_csk_reqsk_queue_is_full(sk)) && !isn) {
 		want_cookie = tcp_syn_flood_action(sk, rsk_ops->slab_name);
 		if (!want_cookie)
 			goto drop;
 	}
-
+	// 可以Accept的队列已满（完成三次握手）
 	if (sk_acceptq_is_full(sk)) {
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_LISTENOVERFLOWS);
 		goto drop;
 	}
-
+	// 可以接收并处理连接请求，调用reqsk_alloc()分配一个连接请求块，用于保存连接请求信息，
+	// 同时初始化在建立连接过程中用于发送ACK、RST段的操作集合，以便在建立连接过程中能方便地调用这些接口。
 	req = inet_reqsk_alloc(rsk_ops, sk, !want_cookie);
 	if (!req)
 		goto drop;
 
 	req->syncookie = want_cookie;
+	// 通过TCP MD5签名来保护BGP会话
 	tcp_rsk(req)->af_specific = af_ops;
 	tcp_rsk(req)->ts_off = 0;
 #if IS_ENABLED(CONFIG_MPTCP)
 	tcp_rsk(req)->is_mptcp = 0;
 #endif
-
+	// 清除TCP选项后初始化mss_clamp和user_mss
 	tcp_clear_options(&tmp_opt);
 	tmp_opt.mss_clamp = af_ops->mss_clamp;
 	tmp_opt.user_mss  = tp->rx_opt.user_mss;
+	// 解析SYN段中的TCP选项
 	tcp_parse_options(sock_net(sk), skb, &tmp_opt, 0,
 			  want_cookie ? NULL : &foc);
-
+	// 如果启动了want_cookie且不存在时间戳选项，则清除已解析的TCP选项。
 	if (want_cookie && !tmp_opt.saw_tstamp)
 		tcp_clear_options(&tmp_opt);
 
@@ -6937,6 +6956,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		tmp_opt.smc_ok = 0;
 
 	tmp_opt.tstamp_ok = tmp_opt.saw_tstamp;
+	// 根据接收到SYN段中的选项和序号来初始化连接请求块的信息。
 	tcp_openreq_init(req, &tmp_opt, skb, sk);
 	inet_rsk(req)->no_srccheck = inet_sk(sk)->transparent;
 
@@ -6972,8 +6992,9 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	}
 
 	tcp_ecn_create_request(req, skb, sk, dst);
-
+	// want_cookie的情况下
 	if (want_cookie) {
+		// 得到服务端初始序列号
 		isn = cookie_init_sequence(af_ops, sk, skb, &req->mss);
 		if (!tmp_opt.tstamp_ok)
 			inet_rsk(req)->ecn_ok = 0;
