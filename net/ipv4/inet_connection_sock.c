@@ -641,6 +641,11 @@ void inet_csk_reset_keepalive_timer(struct sock *sk, unsigned long len)
 }
 EXPORT_SYMBOL(inet_csk_reset_keepalive_timer);
 
+// 获取路由入口
+// 用来根据连接请求块和服务端传输控制块的信息--输出网络设备、源地址、源端口号、目的地址、目的端口号等，
+// 为发送客户端的SYN+ACK段查询路由入口。参数说明如下：
+// sk，为处理服务端连接过程的侦听传输控制块。
+// req，为连接建立的连接请求块。
 struct dst_entry *inet_csk_route_req(const struct sock *sk,
 				     struct flowi4 *fl4,
 				     const struct request_sock *req)
@@ -652,7 +657,7 @@ struct dst_entry *inet_csk_route_req(const struct sock *sk,
 
 	rcu_read_lock();
 	opt = rcu_dereference(ireq->ireq_opt);
-
+	// 初始化用于路由查询的条件组合，包含了输出网络设备、三层和四层协议首部中的参数
 	flowi4_init_output(fl4, ireq->ir_iif, ireq->ir_mark,
 			   RT_CONN_FLAGS(sk), RT_SCOPE_UNIVERSE,
 			   sk->sk_protocol, inet_sk_flowi_flags(sk),
@@ -660,9 +665,12 @@ struct dst_entry *inet_csk_route_req(const struct sock *sk,
 			   ireq->ir_loc_addr, ireq->ir_rmt_port,
 			   htons(ireq->ir_num), sk->sk_uid);
 	security_req_classify_flow(req, flowi4_to_flowi_common(fl4));
+	// 根据路由查询条件，进行路由缓存项的查询。
 	rt = ip_route_output_flow(net, fl4, sk);
 	if (IS_ERR(rt))
 		goto no_route;
+	// 在IP首部中包含了严格源路由选项的情况下，如果从选项中获取的下一跳与路由找到的不匹配，
+	// 则路由失败
 	if (opt && opt->opt.is_strictroute && rt->rt_uses_gateway)
 		goto route_err;
 	rcu_read_unlock();
@@ -981,10 +989,13 @@ static void reqsk_queue_hash_req(struct request_sock *req,
 }
 
 // 启动SYNACK定时器。这便是SYNACK定时器的激活时机，并且将请求加入到ehash中去
+// 将连接请求块保存到“父”传输控制块的散列表中。
 void inet_csk_reqsk_queue_hash_add(struct sock *sk, struct request_sock *req,
 				   unsigned long timeout)
 {
+	// 将连接请求块保存到“父”传输控制块的散列表中，并设置连接建立定时器超时时间。
 	reqsk_queue_hash_req(req, timeout);
+	// 最后更新已存在的连接请求块数，并启动连接建立定时器。
 	inet_csk_reqsk_queue_added(sk);
 }
 EXPORT_SYMBOL_GPL(inet_csk_reqsk_queue_hash_add);
@@ -1221,7 +1232,10 @@ struct sock *inet_csk_complete_hashdance(struct sock *sk, struct sock *child,
 			__NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPMIGRATEREQFAILURE);
 			reqsk_migrate_reset(nreq);
 			__reqsk_free(nreq);
-		} else if (inet_csk_reqsk_queue_add(sk, req, child)) {
+
+		} 
+		// 加入到完成列表中去
+		else if (inet_csk_reqsk_queue_add(sk, req, child)) {
 			return child;
 		}
 	}

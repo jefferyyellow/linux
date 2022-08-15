@@ -2155,6 +2155,8 @@ static inline s64 tcp_rto_delta_us(const struct sock *sk)
 /*
  * Save and compile IPv4 options, return a pointer to it
  */
+// 根据IP选项的长度分配ip_options结构的实例，然后调用ip_options_echo从SKB的控制块中
+// 获取IP选项到该实例中。
 static inline struct ip_options_rcu *tcp_v4_save_options(struct net *net,
 							 struct sk_buff *skb)
 {

@@ -841,6 +841,7 @@ static unsigned int tcp_syn_options(struct sock *sk, struct sk_buff *skb,
 }
 
 /* Set up TCP options for SYN-ACKs. */
+// 为SYN-ACK建立TCP选项
 static unsigned int tcp_synack_options(const struct sock *sk,
 				       struct request_sock *req,
 				       unsigned int mss, struct sk_buff *skb,
@@ -3507,6 +3508,12 @@ int tcp_send_synack(struct sock *sk)
  * @synack_type: Type of synack to prepare
  * @syn_skb: SYN packet just received.  It could be NULL for rtx case.
  */
+// 分配一个skb，并且构建一个SYNACK包，用于建立连接
+// tcp_make_synack用于构造一个SYN+ACK段，并初始化TCP首部及SKB中各字段的项，填入相应的选项，
+// 如MSS、SACK、窗口扩大因子、时间戳等，然后将该段发送给对端。
+// sk：为处理服务端连接过程的侦听控制块
+// dst：为已获取到发送SYN+ACK到客户端的路由缓存项。
+// req：为连接建立的连接请求块
 struct sk_buff *tcp_make_synack(const struct sock *sk, struct dst_entry *dst,
 				struct request_sock *req,
 				struct tcp_fastopen_cookie *foc,
@@ -3522,13 +3529,14 @@ struct sk_buff *tcp_make_synack(const struct sock *sk, struct dst_entry *dst,
 	struct tcphdr *th;
 	int mss;
 	u64 now;
-
+	// 调用alloc_skb分配SKB
 	skb = alloc_skb(MAX_TCP_HEADER, GFP_ATOMIC);
 	if (unlikely(!skb)) {
 		dst_release(dst);
 		return NULL;
 	}
 	/* Reserve space for headers. */
+	// 为MAC层、IP层、TCP层首部预留必要的空间
 	skb_reserve(skb, MAX_TCP_HEADER);
 
 	switch (synack_type) {
@@ -3548,6 +3556,7 @@ struct sk_buff *tcp_make_synack(const struct sock *sk, struct dst_entry *dst,
 		skb_set_owner_w(skb, (struct sock *)sk);
 		break;
 	}
+	// 设置dst
 	skb_dst_set(skb, dst);
 
 	mss = tcp_mss_clamp(tp, dst_metric_advmss(dst));
@@ -3565,7 +3574,7 @@ struct sk_buff *tcp_make_synack(const struct sock *sk, struct dst_entry *dst,
 		if (!tcp_rsk(req)->snt_synack) /* Timestamp first SYNACK */
 			tcp_rsk(req)->snt_synack = tcp_skb_timestamp_us(skb);
 	}
-
+	// 通过TCP MD5签名来保护BGP会话操作相关
 #ifdef CONFIG_TCP_MD5SIG
 	rcu_read_lock();
 	md5 = tcp_rsk(req)->af_specific->req_md5_lookup(sk, req_to_sk(req));
@@ -3573,28 +3582,37 @@ struct sk_buff *tcp_make_synack(const struct sock *sk, struct dst_entry *dst,
 	skb_set_hash(skb, tcp_rsk(req)->txhash, PKT_HASH_TYPE_L4);
 	/* bpf program will be interested in the tcp_flags */
 	TCP_SKB_CB(skb)->tcp_flags = TCPHDR_SYN | TCPHDR_ACK;
+	// 得到tcp头部的长度
 	tcp_header_size = tcp_synack_options(sk, req, mss, skb, &opts, md5,
 					     foc, synack_type,
 					     syn_skb) + sizeof(*th);
-
+	
+	// 初始化TCP首部中的各字段和SKB中的各项。
+	// 在SKB中预留TCP首部空间
 	skb_push(skb, tcp_header_size);
 	skb_reset_transport_header(skb);
 
 	th = (struct tcphdr *)skb->data;
+	// 将TCP首部清零
 	memset(th, 0, sizeof(struct tcphdr));
+	// 设置TCP首部中各字段，包括SYN、ACK、ECN标志位、源地址及目标地址。
 	th->syn = 1;
 	th->ack = 1;
 	tcp_ecn_make_synack(req, th);
 	th->source = htons(ireq->ir_num);
 	th->dest = ireq->ir_rmt_port;
+
 	skb->mark = ireq->ir_mark;
 	skb->ip_summed = CHECKSUM_PARTIAL;
+	// 设置TCP首部中的序号和确认序号。
 	th->seq = htonl(tcp_rsk(req)->snt_isn);
 	/* XXX data is queued and acked as is. No buffer/window check */
 	th->ack_seq = htonl(tcp_rsk(req)->rcv_nxt);
 
 	/* RFC1323: The window in SYN & SYN/ACK segments is never scaled. */
+	//设置SYN+ACK段中的窗口大小
 	th->window = htons(min(req->rsk_rcv_wnd, 65535U));
+	// 写入TCP头选项
 	tcp_options_write(th, NULL, &opts);
 	th->doff = (tcp_header_size >> 2);
 	__TCP_INC_STATS(sock_net(sk), TCP_MIB_OUTSEGS);

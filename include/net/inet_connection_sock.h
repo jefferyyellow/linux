@@ -324,6 +324,7 @@ struct sock *inet_csk_complete_hashdance(struct sock *sk, struct sock *child,
 					 struct request_sock *req,
 					 bool own_req);
 
+// 更新半连接的队列长度和当前未重传过SYN+ACK段的请求块数目
 static inline void inet_csk_reqsk_queue_added(struct sock *sk)
 {
 	reqsk_queue_added(&inet_csk(sk)->icsk_accept_queue);

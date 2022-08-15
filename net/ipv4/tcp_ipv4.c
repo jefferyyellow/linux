@@ -684,6 +684,7 @@ EXPORT_SYMBOL(tcp_v4_send_check);
 #define OPTION_BYTES sizeof(__be32)
 #endif
 
+// 用来发送RST段
 static void tcp_v4_send_reset(const struct sock *sk, struct sk_buff *skb)
 {
 	const struct tcphdr *th = tcp_hdr(skb);
@@ -714,6 +715,8 @@ static void tcp_v4_send_reset(const struct sock *sk, struct sk_buff *skb)
 		return;
 
 	/* Swap the send and the receive. */
+	// 设置TCP首部中各字段，包括目的地址、源地址、TCP首部长度、RST标志、
+	// 序号、确认序号等。
 	memset(&rep, 0, sizeof(rep));
 	rep.th.dest   = th->source;
 	rep.th.source = th->dest;
@@ -807,7 +810,7 @@ static void tcp_v4_send_reset(const struct sock *sk, struct sk_buff *skb)
 			rep.th.doff = arg.iov[0].iov_len / 4;
 		}
 	}
-
+	// 计算校验和，为IP数据报的发送作准备。
 	arg.csum = csum_tcpudp_nofold(ip_hdr(skb)->daddr,
 				      ip_hdr(skb)->saddr, /* XXX */
 				      arg.iov[0].iov_len, IPPROTO_TCP, 0);
@@ -839,6 +842,7 @@ static void tcp_v4_send_reset(const struct sock *sk, struct sk_buff *skb)
 				   inet_twsk(sk)->tw_priority : sk->sk_priority;
 		transmit_time = tcp_transmit_time(sk);
 	}
+	// 调用ip_send_unicast_reply发送该RST段
 	ip_send_unicast_reply(ctl_sk,
 			      skb, &TCP_SKB_CB(skb)->header.h4.opt,
 			      ip_hdr(skb)->saddr, ip_hdr(skb)->daddr,
@@ -860,13 +864,18 @@ out:
 /* The code following below sending ACKs in SYN-RECV and TIME-WAIT states
    outside socket context is ugly, certainly. What can I do?
  */
-
+// 下面的代码是在SYN-RECV和TIME-WAIT状态下，socket上下文之外发送ACKs的代码，
+// 当然是丑陋的。我们可以做什么？
+// 在SYN-RECV状态下，如果接收到的第三次握手段序号无效或者序号不在接收窗口内，且非RST段，
+// 则需要向对端发送ACK段
 static void tcp_v4_send_ack(const struct sock *sk,
 			    struct sk_buff *skb, u32 seq, u32 ack,
 			    u32 win, u32 tsval, u32 tsecr, int oif,
 			    struct tcp_md5sig_key *key,
 			    int reply_flags, u8 tos)
 {
+	
+	// 定义ACK段的TCP首部，包括时间戳选项。
 	const struct tcphdr *th = tcp_hdr(skb);
 	struct {
 		struct tcphdr th;
@@ -884,8 +893,10 @@ static void tcp_v4_send_ack(const struct sock *sk,
 	memset(&rep.th, 0, sizeof(struct tcphdr));
 	memset(&arg, 0, sizeof(arg));
 
+	
 	arg.iov[0].iov_base = (unsigned char *)&rep;
 	arg.iov[0].iov_len  = sizeof(rep.th);
+	// 设置ACK段时间戳选项
 	if (tsecr) {
 		rep.opt[0] = htonl((TCPOPT_NOP << 24) | (TCPOPT_NOP << 16) |
 				   (TCPOPT_TIMESTAMP << 8) |
@@ -896,6 +907,8 @@ static void tcp_v4_send_ack(const struct sock *sk,
 	}
 
 	/* Swap the send and the receive. */
+	// 设置TCP首部种各字段，包括目的地址、源地址、TCP首部长度、序号、确认序号、ACK标志、
+	// 接收窗口大小等。
 	rep.th.dest    = th->source;
 	rep.th.source  = th->dest;
 	rep.th.doff    = arg.iov[0].iov_len / 4;
@@ -904,6 +917,7 @@ static void tcp_v4_send_ack(const struct sock *sk,
 	rep.th.ack     = 1;
 	rep.th.window  = htons(win);
 
+	// 与通过TCP MD5签名来保护BGP会话操作有关
 #ifdef CONFIG_TCP_MD5SIG
 	if (key) {
 		int offset = (tsecr) ? 3 : 0;
@@ -921,6 +935,7 @@ static void tcp_v4_send_ack(const struct sock *sk,
 	}
 #endif
 	arg.flags = reply_flags;
+	// 计算TCP段的伪首部的校验和，存放到ip_reply_arg结构体中。
 	arg.csum = csum_tcpudp_nofold(ip_hdr(skb)->daddr,
 				      ip_hdr(skb)->saddr, /* XXX */
 				      arg.iov[0].iov_len, IPPROTO_TCP, 0);
@@ -937,6 +952,7 @@ static void tcp_v4_send_ack(const struct sock *sk,
 	ctl_sk->sk_priority = (sk->sk_state == TCP_TIME_WAIT) ?
 			   inet_twsk(sk)->tw_priority : sk->sk_priority;
 	transmit_time = tcp_transmit_time(sk);
+	// 调用网络层函数ip_send_reply，发送此ACK段。
 	ip_send_unicast_reply(ctl_sk,
 			      skb, &TCP_SKB_CB(skb)->header.h4.opt,
 			      ip_hdr(skb)->saddr, ip_hdr(skb)->daddr,
@@ -1003,6 +1019,11 @@ static void tcp_v4_reqsk_send_ack(const struct sock *sk, struct sk_buff *skb,
  *	This still operates on a request_sock only, not on a big
  *	socket.
  */
+// 在收到一个SYN包以后发送一个SYN-ACK
+// 用来为服务端构造回应客户端连接请求SYN段的SYN=-ACK段,并将其封装在IP数据报中发送给客户端。
+// sk：服务端侦听传输控制块
+// req：为客户端请求的连接建立的连接请求块
+// dst：已查询的目标路由缓存项
 static int tcp_v4_send_synack(const struct sock *sk, struct dst_entry *dst,
 			      struct flowi *fl,
 			      struct request_sock *req,
@@ -1017,11 +1038,12 @@ static int tcp_v4_send_synack(const struct sock *sk, struct dst_entry *dst,
 	u8 tos;
 
 	/* First, grab a route. */
+	// 根据连接请求块中的信息查询路由。如果失败，则直接退出，不再发送SYN-ACK段。
 	if (!dst && (dst = inet_csk_route_req(sk, &fl4, req)) == NULL)
 		return -1;
-
+	// 根据当前的传输控制块、查询到的路由以及连接请求块中的相关信息构建SYN-ACK段。
 	skb = tcp_make_synack(sk, dst, req, foc, synack_type, syn_skb);
-
+	// 如果构建SYN+ACK段成功，则生成TCP检验码，并调用ip_build_and_send_pkt生成IP数据报并将其发送出去。
 	if (skb) {
 		__tcp_v4_send_check(skb, ireq->ir_loc_addr, ireq->ir_rmt_addr);
 
@@ -1035,6 +1057,7 @@ static int tcp_v4_send_synack(const struct sock *sk, struct dst_entry *dst,
 			tos |= INET_ECN_ECT_0;
 
 		rcu_read_lock();
+		// 调用ip_build_and_send_pkt生成IP数据报并将其发送出去。
 		err = ip_build_and_send_pkt(skb, sk, ireq->ir_loc_addr,
 					    ireq->ir_rmt_addr,
 					    rcu_dereference(ireq->ireq_opt),
@@ -1498,6 +1521,10 @@ EXPORT_SYMBOL(tcp_v4_conn_request);
  * The three way handshake has completed - we got a valid synack -
  * now create the new socket.
  */
+// 三次握手已经完成，我们得到了一个可用的synack，现在创建一个新的套接字。
+// 完成三次握手后，为新连接创建一个传输控制块，并将其初始化。在创建传输控制块之前
+// 需检测已经建立但未被accept的“字”传输控制块数量是否已经达到上限，并未“子”传输
+// 控制块获取路由入口。
 struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 				  struct request_sock *req,
 				  struct dst_entry *dst,
@@ -1515,17 +1542,23 @@ struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 	int l3index;
 #endif
 	struct ip_options_rcu *inet_opt;
-
+	// 完成三次握手的队列已满
+	// 如果已经建立但未被accept的“子”传输控制块数量已经达到上限，则不能再创建新的传输控制块，
+	// 跳转到exit_overflow处统计后直接返回NULL。
 	if (sk_acceptq_is_full(sk))
 		goto exit_overflow;
-
+	// 创建一个新的套接字
 	newsk = tcp_create_openreq_child(sk, req, skb);
 	if (!newsk)
 		goto exit_nonewsk;
 
+	// 下面就是初始化新的套接字了
+	// 设置“子”传输控制块的GSO类型
 	newsk->sk_gso_type = SKB_GSO_TCPV4;
 	inet_sk_rx_dst_set(newsk, skb);
 
+	// 初始化传输控制块中的一些成员，包括目的地址、发送地址、IP选项、组播的网络接口,
+	// TTL、IP选项长度等。
 	newtp		      = tcp_sk(newsk);
 	newinet		      = inet_sk(newsk);
 	ireq		      = inet_rsk(req);
@@ -1556,13 +1589,17 @@ struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 	} else {
 		/* syncookie case : see end of cookie_v4_check() */
 	}
+	// 设置“子”传输控制块的路由缓存项，同时确定输出网络接口的特性，包括是否支持GSO，
+	// 是否支持分散聚合IO，是否支持硬件执行校验和等。需要说明的是，在决定发送是否进行GSO时，
+	// 不但需根据网络设备特性，还需根据传输控制块是否支持或者支持何种GSO方式。
 	sk_setup_caps(newsk, dst);
 
 	tcp_ca_openreq_child(newsk, dst);
-
+	// 根据存储在路由项中的路径MTU来设置“子”传输控制块当前的MSS。
 	tcp_sync_mss(newsk, dst_mtu(dst));
+	// 根据存储在路由项中的MSS来设置“子”传输控制块的最大段长度。
 	newtp->advmss = tcp_mss_clamp(tcp_sk(sk), dst_metric_advmss(dst));
-
+	// 初始化用于延时发送ACK段控制数据块中的rcv_mss。
 	tcp_initialize_rcv_mss(newsk);
 
 #ifdef CONFIG_TCP_MD5SIG
@@ -1582,9 +1619,11 @@ struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 		sk_gso_disable(newsk);
 	}
 #endif
-
+	// 虽然“子”传输控制块没有显示与本地端口绑定，事实上已经进行了绑定，因此，
+	// 该“子”传输控制块需要和本地端口信息作相应的绑定。
 	if (__inet_inherit_port(sk, newsk) < 0)
 		goto put_and_exit;
+	// 将“子”传输控制块加入ebash散列表中，这样就可以正常接收TCP段了 
 	*own_req = inet_ehash_nolisten(newsk, req_to_sk(req_unhash),
 				       &found_dup_sk);
 	if (likely(*own_req)) {
@@ -1602,6 +1641,7 @@ struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 			newsk = NULL;
 		}
 	}
+	// 返回新建的传输控制块
 	return newsk;
 
 exit_overflow:
@@ -1972,21 +2012,24 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	th = (const struct tcphdr *)skb->data;
 	iph = ip_hdr(skb);
 lookup:
+	// 找到skb对应的socket
 	sk = __inet_lookup_skb(&tcp_hashinfo, skb, __tcp_hdrlen(th), th->source,
 			       th->dest, sdif, &refcounted);
 	if (!sk)
-		goto no_tcp_socket;
+		goto tcp_check_req;
 
 process:
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
-
+	// 如果服务端发送SYN+ACK后的状态
 	if (sk->sk_state == TCP_NEW_SYN_RECV) {
+		// 得到对应的请求
 		struct request_sock *req = inet_reqsk(sk);
 		bool req_stolen = false;
 		struct sock *nsk;
-
+		// 从请求里面得到对应的侦听套接字
 		sk = req->rsk_listener;
+
 		drop_reason = tcp_inbound_md5_hash(sk, skb,
 						   &iph->saddr, &iph->daddr,
 						   AF_INET, dif, sdif);
@@ -1995,10 +2038,12 @@ process:
 			reqsk_put(req);
 			goto discard_it;
 		}
+		// 校验和检测
 		if (tcp_checksum_complete(skb)) {
 			reqsk_put(req);
 			goto csum_error;
 		}
+		// 如果不在侦听套接字了，从SO_REUSEPORT组中选择一个套接字。
 		if (unlikely(sk->sk_state != TCP_LISTEN)) {
 			nsk = reuseport_migrate_sock(sk, req_to_sk(req), skb);
 			if (!nsk) {
@@ -2017,10 +2062,12 @@ process:
 		}
 		refcounted = true;
 		nsk = NULL;
+		// 包过滤检测
 		if (!tcp_filter(sk, skb)) {
 			th = (const struct tcphdr *)skb->data;
 			iph = ip_hdr(skb);
 			tcp_v4_fill_cb(skb, iph, th);
+			// 处理收到的ACK请求
 			nsk = tcp_check_req(sk, skb, req, false, &req_stolen);
 		} else {
 			drop_reason = SKB_DROP_REASON_SOCKET_FILTER;
@@ -2042,7 +2089,11 @@ process:
 		if (nsk == sk) {
 			reqsk_put(req);
 			tcp_v4_restore_cb(skb);
-		} else if (tcp_child_process(sk, nsk, skb)) {
+		} 
+		// 新的“子”传输控制块已经建立并激活，则该“子”传输控制块需处理TCP段，同时也需
+		// 唤醒等待侦听套接口的进程，如accept()调用等。如果此时，“子”传输控制块被用户进程
+		// 锁定，则将该TCP段添加到“子”传输看的后备接收队列中。
+		else if (tcp_child_process(sk, nsk, skb)) {
 			tcp_v4_send_reset(nsk, skb);
 			goto discard_and_relse;
 		} else {

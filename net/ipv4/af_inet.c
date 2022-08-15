@@ -647,16 +647,18 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	 * __inet_stream_connect().
 	 */
 	if (uaddr) {
+		// 校验地址长度是否合法
 		if (addr_len < sizeof(uaddr->sa_family))
 			return -EINVAL;
-
+		// 如果参数uaddr没有设置地址族，则不能进行connect操作而退出，在这之前需调用
+		// disconnect接口断开连接，TCP的disconnect接口参见tcp_disconnect()函数
 		if (uaddr->sa_family == AF_UNSPEC) {
 			err = sk->sk_prot->disconnect(sk, flags);
 			sock->state = err ? SS_DISCONNECTING : SS_UNCONNECTED;
 			goto out;
 		}
 	}
-
+	// 套接口状态不是SS_UNCONNECTED，不能进行connect操作，直接返回相应的错误码。
 	switch (sock->state) {
 	default:
 		err = -EINVAL;
@@ -671,8 +673,12 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 			err = -EALREADY;
 		/* Fall out of switch with err, set for this state */
 		break;
+	// 只有当套接口状态为SS_UNCONNECTED时才能进行connect操作。连接需要3次握手，
+	// connect接口只是完成发送SYN段过程，后续的两次握手由协议栈完成。SYN段发送成功后，
+	// 后续只需等待第三次握手结束。TCP中传输接口层connect接口为tcp_v4_connect()函数。
 	case SS_UNCONNECTED:
 		err = -EISCONN;
+		// 如果TCP不在CLOSE状态，说明已连接，因此无需进行连接操作了，跳转到out处。
 		if (sk->sk_state != TCP_CLOSE)
 			goto out;
 
@@ -681,11 +687,11 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 			if (err)
 				goto out;
 		}
-
+		// 协议层进行连接
 		err = sk->sk_prot->connect(sk, uaddr, addr_len);
 		if (err < 0)
 			goto out;
-
+		// SYN段发出后，设置套接口状态为SS_CONNECTING，表示正在进行连接操作。
 		sock->state = SS_CONNECTING;
 
 		if (!err && inet_sk(sk)->defer_connect)
@@ -695,6 +701,7 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 		 * difference is that return value in non-blocking
 		 * case is EINPROGRESS, rather than EALREADY.
 		 */
+		// 初始化错误为EINPROGRESS，如果是非阻塞模式，则返回EINPROGRESS，表示正在连接。
 		err = -EINPROGRESS;
 		break;
 	}
@@ -740,6 +747,12 @@ sock_error:
 }
 EXPORT_SYMBOL(__inet_stream_connect);
 
+// inet_stream_connect是connect系统调用套接口层实现，首先校验设置的地址簇，
+// 然后校验套接口的状态，套接口状态为SS_UNCONNECTED时调用传输层接口，
+// TCP中为tcp_v4_connect，最后等待连接的完成或失败
+// sock，为进行连接的套接口。
+// uaddr和addr_len为连接的目的地址及其长度。
+// flags为连接的标志，如O_NONBLOCK等。
 int inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 			int addr_len, int flags)
 {

@@ -5685,6 +5685,7 @@ static bool tcp_reset_check(const struct sock *sk, const struct sk_buff *skb)
 /* Does PAWS and seqno based validation of an incoming segment, flags will
  * play significant role here.
  */
+// 基于PAWS和seqno来验证传入的数据段，标志将在这里发挥重要作用。
 static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 				  const struct tcphdr *th, int syn_inerr)
 {
@@ -5692,6 +5693,9 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	SKB_DR(reason);
 
 	/* RFC1323: H1. Apply PAWS check first. */
+	// 通过tcp_fast_parse_options解析TCP选项，同时检查时间戳选项。如果首部中存在
+	// 时间戳选项，且PAWS检验失败，则丢弃该数据包。如果不是RST段，则还需发送DACK给对端，
+	// 说明接收到的TCP段已确认过。
 	if (tcp_fast_parse_options(sock_net(sk), skb, th, tp) &&
 	    tp->rx_opt.saw_tstamp &&
 	    tcp_paws_discard(sk, skb)) {
@@ -5708,6 +5712,7 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	}
 
 	/* Step 1: check sequence number */
+	// 如果TCP序号无效，则丢弃该段，在这之前如果TCP段无RST标志，需发送DACK给对端。
 	if (!tcp_sequence(tp, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq)) {
 		/* RFC793, page 37: "In all states except SYN-SENT, all reset
 		 * (RST) segments are validated by checking their SEQ-fields."
@@ -5730,6 +5735,7 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	}
 
 	/* Step 2: check RST bit */
+	// 如果TCP段中存在RST标志，则给对端发送RST段复位，然后丢弃该段。
 	if (th->rst) {
 		/* RFC 5961 3.2 (extend to match against (RCV.NXT - 1) after a
 		 * FIN and SACK too if available):
@@ -5777,6 +5783,7 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	/* step 4: Check for a SYN
 	 * RFC 5961 4.2 : Send a challenge ack
 	 */
+	// 如果TCP首部中存在SYN标志，则向对端发送RST段，重新复位。
 	if (th->syn) {
 syn_challenge:
 		if (syn_inerr)
@@ -6482,7 +6489,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		}
 		SKB_DR_SET(reason, TCP_FLAGS);
 		goto discard;
-
+	
 	case TCP_SYN_SENT:
 		tp->rx_opt.saw_tstamp = 0;
 		tcp_mstamp_refresh(tp);
@@ -6517,14 +6524,16 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		SKB_DR_SET(reason, TCP_FLAGS);
 		goto discard;
 	}
+	// 检验数据包
 	if (!tcp_validate_incoming(sk, skb, th, 0))
 		return 0;
 
 	/* step 5: check the ACK field */
+	// 处理TCP段ACK标志，tcp_ack返回非0值表示处理ACK段成功，是正常的第三次握手TCP段。
 	acceptable = tcp_ack(sk, skb, FLAG_SLOWPATH |
 				      FLAG_UPDATE_TS_RECENT |
 				      FLAG_NO_CHALLENGE_ACK) > 0;
-
+	// 如果不是正常的第三次握手TCP段，则丢弃
 	if (!acceptable) {
 		if (sk->sk_state == TCP_SYN_RECV)
 			return 1;	/* send one RST */
@@ -6533,6 +6542,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		goto discard;
 	}
 	switch (sk->sk_state) {
+	// 如果是半连接状态下，接收到第三次握手ACK段后的处理过程。
 	case TCP_SYN_RECV:
 		tp->delivered++; /* SYN-ACK delivery isn't tracked in tcp_ack */
 		if (!tp->srtt_us)
@@ -6548,16 +6558,21 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			WRITE_ONCE(tp->copied_seq, tp->rcv_nxt);
 		}
 		smp_mb();
+		// 设置为连接建立状态
 		tcp_set_state(sk, TCP_ESTABLISHED);
+		// 通知socket状态变化
 		sk->sk_state_change(sk);
 
 		/* Note, that this wakeup is only for marginal crossed SYN case.
 		 * Passively open sockets are not waked up, because
 		 * sk->sk_sleep == NULL and sk->sk_socket == NULL.
 		 */
+		// 发送信号给那些通过该套接口发送数据得进程，通知他们套接口目前已可以发送数据了。
 		if (sk->sk_socket)
 			sk_wake_async(sk, SOCK_WAKE_IO, POLL_OUT);
 
+		// 初始化传输控制块各字段，如果存在时间戳选项，同时平滑RTT为零，
+		// 则需计算重传超时时间
 		tp->snd_una = TCP_SKB_CB(skb)->ack_seq;
 		tp->snd_wnd = ntohs(th->window) << tp->rx_opt.snd_wscale;
 		tcp_init_wl(tp, TCP_SKB_CB(skb)->seq);
@@ -6565,13 +6580,16 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		if (tp->rx_opt.tstamp_ok)
 			tp->advmss -= TCPOLEN_TSTAMP_ALIGNED;
 
+		// 为套接口建立路由，初始化拥塞控制模块
 		if (!inet_csk(sk)->icsk_ca_ops->cong_control)
 			tcp_update_pacing_rate(sk);
 
 		/* Prevent spurious tcp_cwnd_restart() on first data packet */
+		// 更新最近一次发送数据包的时间
 		tp->lsndtime = tcp_jiffies32;
-
+		// 初始化最大报文段长度
 		tcp_initialize_rcv_mss(sk);
+		// 计算有关TCP首部预测的标准
 		tcp_fast_path_on(tp);
 		break;
 
@@ -6645,6 +6663,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	}
 
 	/* step 6: check the URG bit */
+	// 检测“带外数据”标志位
 	tcp_urg(sk, skb, th);
 
 	/* step 7: process the segment text */
@@ -6677,17 +6696,20 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		}
 		fallthrough;
 	case TCP_ESTABLISHED:
+		// 对已经接收到的TCP段排队，在建立连接阶段应该不会接收到TCP段。
 		tcp_data_queue(sk, skb);
 		queued = 1;
 		break;
 	}
 
 	/* tcp_data could move socket to TIME-WAIT */
+	// 如果状态不为CLOSE时，检测是否有数据和ACK需发送。
 	if (sk->sk_state != TCP_CLOSE) {
 		tcp_data_snd_check(sk);
 		tcp_ack_snd_check(sk);
 	}
-
+	// 如果queued标志来确定是否释放接收到得TCP段，
+	// 如果接收到得TCP段已经添加到接收队列中，则不释放。
 	if (!queued) {
 discard:
 		tcp_drop_reason(sk, skb, reason);
@@ -6731,6 +6753,7 @@ static inline void pr_drop_req(struct request_sock *req, __u16 port, int family)
  * RFC8311 §4.3 which updates RFC3168 to allow the development of such
  * extensions.
  */
+// 用于判断连接是否使用ECN。要注意的是在建立连接时，要求IP报的ECN域不能被设置，否则就禁用ECN。
 static void tcp_ecn_create_request(struct request_sock *req,
 				   const struct sk_buff *skb,
 				   const struct sock *listen_sk,
@@ -6920,6 +6943,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	if ((net->ipv4.sysctl_tcp_syncookies == 2 ||
 	     inet_csk_reqsk_queue_is_full(sk)) && !isn) {
 		want_cookie = tcp_syn_flood_action(sk, rsk_ops->slab_name);
+		// 没有启用want_cookie就丢弃请求
 		if (!want_cookie)
 			goto drop;
 	}
@@ -6963,15 +6987,17 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	/* Note: tcp_v6_init_req() might override ir_iif for link locals */
 	inet_rsk(req)->ir_iif = inet_request_bound_dev_if(sk, skb);
 
+	// 查找路由
 	dst = af_ops->route_req(sk, skb, &fl, req);
 	if (!dst)
 		goto drop_and_free;
-
+	// 初始化服务端的TS偏移值
 	if (tmp_opt.tstamp_ok)
 		tcp_rsk(req)->ts_off = af_ops->init_ts_off(net, skb);
-
+	// 没有设置want_cookie且tcp_tw_isn非0，
 	if (!want_cookie && !isn) {
 		/* Kill the following clause, if you dislike this way. */
+		// 在未启动syncookies的情况下受到synflood攻击，则丢弃接收到的段
 		if (!net->ipv4.sysctl_tcp_syncookies &&
 		    (net->ipv4.sysctl_max_syn_backlog - inet_csk_reqsk_queue_len(sk) <
 		     (net->ipv4.sysctl_max_syn_backlog >> 2)) &&
@@ -6991,24 +7017,27 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		isn = af_ops->init_seq(skb);
 	}
 
+	// 用于判断连接是否使用ECN
 	tcp_ecn_create_request(req, skb, sk, dst);
 	// want_cookie的情况下
 	if (want_cookie) {
 		// 得到服务端初始序列号
-		isn = cookie_init_sequence(af_ops, sk, skb, &req->mss);
 		if (!tmp_opt.tstamp_ok)
+		isn = cookie_init_sequence(af_ops, sk, skb, &req->mss);
 			inet_rsk(req)->ecn_ok = 0;
 	}
-
+	// 初始化服务端的初始序号
 	tcp_rsk(req)->snt_isn = isn;
 	tcp_rsk(req)->txhash = net_tx_rndhash();
 	tcp_rsk(req)->syn_tos = TCP_SKB_CB(skb)->ip_dsfield;
+	// 初始化接收窗口
 	tcp_openreq_init_rwin(req, sk, dst);
 	sk_rx_queue_set(req_to_sk(req), skb);
 	if (!want_cookie) {
 		tcp_reqsk_record_syn(sk, req, skb);
 		fastopen_sk = tcp_try_fastopen(sk, skb, req, &foc, dst);
 	}
+	// 快速打开的情况下
 	if (fastopen_sk) {
 		af_ops->send_synack(fastopen_sk, dst, &fl, req,
 				    &foc, TCP_SYNACK_FASTOPEN, skb);
@@ -7022,16 +7051,24 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		sk->sk_data_ready(sk);
 		bh_unlock_sock(fastopen_sk);
 		sock_put(fastopen_sk);
-	} else {
+	} 
+	// 普通情况下
+	else {
+		// 不是快速打开的侦听套接字
 		tcp_rsk(req)->tfo_listener = false;
+		// 设置了want_cookie，则需要将连接请求块保存到其父传输控制块的散列表中去
 		if (!want_cookie) {
+			// 计算超时重传
 			req->timeout = tcp_timeout_init((struct sock *)req);
+			// 将连接请求块加入SYN请求队列，并且启动ACK超时重传定时器
 			inet_csk_reqsk_queue_hash_add(sk, req, req->timeout);
 		}
+		// 发送SYN+ACK段
 		af_ops->send_synack(sk, dst, &fl, req, &foc,
 				    !want_cookie ? TCP_SYNACK_NORMAL :
 						   TCP_SYNACK_COOKIE,
 				    skb);
+		// 如果启用了want_cookie，则是根据序号来判断三次握手的，因此无需保存连接请求，直接将其释放。
 		if (want_cookie) {
 			reqsk_free(req);
 			return 0;
