@@ -6897,6 +6897,7 @@ u16 tcp_get_syncookie_mss(struct request_sock_ops *rsk_ops,
 }
 EXPORT_SYMBOL_GPL(tcp_get_syncookie_mss);
 
+// 服务器用来处理客户端连接请求的函数(第一次握手的syn段)
 int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		     const struct tcp_request_sock_ops *af_ops,
 		     struct sock *sk, struct sk_buff *skb)
@@ -6919,6 +6920,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	// 启用tcp_syncookies，或者半连接队列已满就设置want_cookie
 	if ((net->ipv4.sysctl_tcp_syncookies == 2 ||
 	     inet_csk_reqsk_queue_is_full(sk)) && !isn) {
+		// 设置want_cookie
 		want_cookie = tcp_syn_flood_action(sk, rsk_ops->slab_name);
 		if (!want_cookie)
 			goto drop;

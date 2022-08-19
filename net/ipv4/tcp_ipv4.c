@@ -1477,10 +1477,11 @@ const struct tcp_request_sock_ops tcp_request_sock_ipv4_ops = {
 	.send_synack	=	tcp_v4_send_synack,
 };
 
-// 服务器用来处理客户端连接请求的函数
+// 服务器用来处理客户端连接请求的函数(第一次握手的syn段)
 int tcp_v4_conn_request(struct sock *sk, struct sk_buff *skb)
 {
 	/* Never answer to SYNs send to broadcast or multicast */
+	// SYN段发送到广播地址或组播地址的话，直接返回0
 	if (skb_rtable(skb)->rt_flags & (RTCF_BROADCAST | RTCF_MULTICAST))
 		goto drop;
 
