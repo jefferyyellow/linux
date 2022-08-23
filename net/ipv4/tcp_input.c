@@ -6048,11 +6048,12 @@ void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 	tcp_init_buffer_space(sk);
 }
 
+// 完成连接
 void tcp_finish_connect(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
-
+	// 设置为已经建立连接状态
 	tcp_set_state(sk, TCP_ESTABLISHED);
 	icsk->icsk_ack.lrcvtime = tcp_jiffies32;
 
@@ -6068,10 +6069,11 @@ void tcp_finish_connect(struct sock *sk, struct sk_buff *skb)
 	 * packet.
 	 */
 	tp->lsndtime = tcp_jiffies32;
-
+	// 如果启用了连接保活，则启用连接保活定时器。
 	if (sock_flag(sk, SOCK_KEEPOPEN))
 		inet_csk_reset_keepalive_timer(sk, keepalive_time_when(tp));
 
+	// 设置首部预测标志
 	if (!tp->rx_opt.snd_wscale)
 		__tcp_fast_path_on(tp, tp->snd_wnd);
 	else
@@ -6175,11 +6177,11 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 	int saved_clamp = tp->rx_opt.mss_clamp;
 	bool fastopen_fail;
 	SKB_DR(reason);
-
+	// 解析段中的TCP选项，并保存到传输控制块中
 	tcp_parse_options(sock_net(sk), skb, &tp->rx_opt, 0, &foc);
 	if (tp->rx_opt.saw_tstamp && tp->rx_opt.rcv_tsecr)
 		tp->rx_opt.rcv_tsecr -= tp->tsoffset;
-
+	// 处理TCP段中存在ACK标志的情况
 	if (th->ack) {
 		/* rfc793:
 		 * "If the state is SYN-SENT then
@@ -6214,7 +6216,8 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 		 *    connection reset", drop the segment, enter CLOSED state,
 		 *    delete TCB, and return."
 		 */
-
+		// 在TCP_SYN_SENT的状态下接收到了ACk+RST段，需调用tcp_reset设置ECONNREFUSED错误码,
+		// 同时通知等待该套接口的进程，然后关闭该套接口。
 		if (th->rst) {
 			tcp_reset(sk, skb);
 consume:
@@ -6229,6 +6232,8 @@ consume:
 		 *    See note below!
 		 *                                        --ANK(990513)
 		 */
+		// 在TCP_SYN_SENT状态下接收到的段必须存在SYN标志，否则说明接收到的段无效，
+		// 需跳转到discard_and_undo处执行，清除解析得到的TCP选项，然后丢弃该段。
 		if (!th->syn) {
 			SKB_DR_SET(reason, TCP_FLAGS);
 			goto discard_and_undo;
@@ -6239,9 +6244,10 @@ consume:
 		 *    (our SYN has been ACKed), change the connection
 		 *    state to ESTABLISHED..."
 		 */
-
+		// 从TCP首部标志中获取支持显式拥塞通知的特性。对于支持ECN的TCP段来说，SYN的ACK只设置ECE标志。
+		// 如果接收到的段与之不符，表示对端不支持显式拥塞通知。
 		tcp_ecn_rcv_synack(tp, th);
-
+		// 下面是初始化与窗口有关的成员变量。
 		tcp_init_wl(tp, TCP_SKB_CB(skb)->seq);
 		tcp_try_undo_spurious_syn(sk);
 		tcp_ack(sk, skb, FLAG_SLOWPATH);
@@ -6256,12 +6262,12 @@ consume:
 		 * never scaled.
 		 */
 		tp->snd_wnd = ntohs(th->window);
-
+		// 根据是否支持时间戳选项来设置传输控制块的相关字段
 		if (!tp->rx_opt.wscale_ok) {
 			tp->rx_opt.snd_wscale = tp->rx_opt.rcv_wscale = 0;
 			tp->window_clamp = min(tp->window_clamp, 65535U);
 		}
-
+		
 		if (tp->rx_opt.saw_tstamp) {
 			tp->rx_opt.tstamp_ok	   = 1;
 			tp->tcp_header_len =
@@ -6272,6 +6278,7 @@ consume:
 			tp->tcp_header_len = sizeof(struct tcphdr);
 		}
 
+		// 下面初始化PMTU、MSS等成员变量。
 		tcp_sync_mss(sk, icsk->icsk_pmtu_cookie);
 		tcp_initialize_rcv_mss(sk);
 
@@ -6283,18 +6290,21 @@ consume:
 		smc_check_reset_syn(tp);
 
 		smp_mb();
-
+		// 完成TCP连接
 		tcp_finish_connect(sk, skb);
 
 		fastopen_fail = (tp->syn_fastopen || tp->syn_data) &&
 				tcp_rcv_fastopen_synack(sk, skb, &foc);
 
+		// 如果套接口不处于SOCK_DEAD状态，则唤醒等待该套接口的进程，同时向套接口的异步等待列表
+		// 上的进程发送信号，通知他们该套接口可以输出数据了。
 		if (!sock_flag(sk, SOCK_DEAD)) {
 			sk->sk_state_change(sk);
 			sk_wake_async(sk, SOCK_WAKE_IO, POLL_OUT);
 		}
 		if (fastopen_fail)
 			return -1;
+		// 连接建立完成，根据情况进入延时确认模式
 		if (sk->sk_write_pending ||
 		    icsk->icsk_accept_queue.rskq_defer_accept ||
 		    inet_csk_in_pingpong_mode(sk)) {
@@ -6316,7 +6326,8 @@ consume:
 	}
 
 	/* No ACK in the segment */
-
+	// 在TCP_SYN_SENT状态下如果接收到RST段，则段跳转到discard_and_undo处，清除解析得到的TCP选项，
+	// 并将传输控制块丢弃。
 	if (th->rst) {
 		/* rfc793:
 		 * "If the RST bit is set
@@ -6328,11 +6339,13 @@ consume:
 	}
 
 	/* PAWS check. */
+	// 如果PAWS检测无效，则跳转到discard_and_undo处，清除解析得到的TCP选项，并将传输控制块丢弃。
 	if (tp->rx_opt.ts_recent_stamp && tp->rx_opt.saw_tstamp &&
 	    tcp_paws_reject(&tp->rx_opt, 0)) {
 		SKB_DR_SET(reason, TCP_RFC7323_PAWS);
 		goto discard_and_undo;
 	}
+	// 我们看到没有ACK的SYN。 它是同时连接交叉SYN的尝试。 特别是，它可以连接到自己。
 	if (th->syn) {
 		/* We see SYN without ACK. It is attempt of
 		 * simultaneous connect with crossed SYNs.
@@ -6493,11 +6506,15 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	case TCP_SYN_SENT:
 		tp->rx_opt.saw_tstamp = 0;
 		tcp_mstamp_refresh(tp);
+		// 处理TCP_SYN_SENT状态下接受到的TCP段,如果返回值大于0则表示需给对方发送RST段,
+		// 该TCP段的释放由tcp_rcv_state_process的调用者来处理。
 		queued = tcp_rcv_synsent_state_process(sk, skb, th);
 		if (queued >= 0)
 			return queued;
 
 		/* Do step6 onward by hand. */
+		// 在处理了TCP_SYN_SENT状态下接收到的段之后，还需处理紧急数据，然后释放该段，
+		// 最后检测是否有数据需要发送。
 		tcp_urg(sk, skb, th);
 		__kfree_skb(skb);
 		tcp_data_snd_check(sk);

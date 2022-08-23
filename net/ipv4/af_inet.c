@@ -1328,6 +1328,7 @@ static int inet_sk_reselect_saddr(struct sock *sk)
 	return __sk_prot_rehash(sk);
 }
 
+// 重新计算路由
 int inet_sk_rebuild_header(struct sock *sk)
 {
 	struct inet_sock *inet = inet_sk(sk);

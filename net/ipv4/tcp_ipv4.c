@@ -210,13 +210,15 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	int err;
 	struct ip_options_rcu *inet_opt;
 	struct inet_timewait_death_row *tcp_death_row = sock_net(sk)->ipv4.tcp_death_row;
-
+	// 校验目的地址长度的有效性
 	if (addr_len < sizeof(struct sockaddr_in))
 		return -EINVAL;
-
+	// 校验协议族的有效性
 	if (usin->sin_family != AF_INET)
 		return -EAFNOSUPPORT;
 
+	// 将临时变量下一跳的地址和目的地址值都暂时设置为connect参数中的地址。
+	// 如果使用源地址路由，由将下一跳设置为IP选择中的faddr。
 	nexthop = daddr = usin->sin_addr.s_addr;
 	inet_opt = rcu_dereference_protected(inet->inet_opt,
 					     lockdep_sock_is_held(sk));
@@ -229,6 +231,9 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	orig_sport = inet->inet_sport;
 	orig_dport = usin->sin_port;
 	fl4 = &inet->cork.fl.u.ip4;
+	// 调用ip_route_connect根据下一跳地址等信息查找目的路由缓存项，如果路由查找命中，
+	// 则生成一个相应的路由缓存项，这个缓存项不但可以用于当前待发送SYN段，而且对后续的
+	// 所有数据包都可以起到一个加速路由查找的作用。
 	rt = ip_route_connect(fl4, nexthop, inet->inet_saddr,
 			      sk->sk_bound_dev_if, IPPROTO_TCP, orig_sport,
 			      orig_dport, sk);
@@ -239,33 +244,39 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 		return err;
 	}
 
+	// TCP不能使用类型位组播或多播的路由缓存项。
 	if (rt->rt_flags & (RTCF_MULTICAST | RTCF_BROADCAST)) {
 		ip_rt_put(rt);
 		return -ENETUNREACH;
 	}
 
+	// 如果没有启用源路由选项，则使用获取得到路由缓存项中的目的地址。
 	if (!inet_opt || !inet_opt->opt.srr)
 		daddr = fl4->daddr;
-
+	// 如果还未设置传输控制块中的源地址，则使用路由缓存项中的源地址对其进行设置。
 	if (!inet->inet_saddr)
 		inet->inet_saddr = fl4->saddr;
 	sk_rcv_saddr_set(sk, inet->inet_saddr);
-
+	// 如果传输控制块中的时间戳和目的地址中已被使用过，则说明该传输控制块之前已
+	// 建立连接并进行过通信，需要重新初始化相关成员。
 	if (tp->rx_opt.ts_recent_stamp && inet->inet_daddr != daddr) {
 		/* Reset inherited state */
+		// 重置传承的状态
 		tp->rx_opt.ts_recent	   = 0;
 		tp->rx_opt.ts_recent_stamp = 0;
 		if (likely(!tp->repair))
 			WRITE_ONCE(tp->write_seq, 0);
 	}
-
+	// 将目的地址及目标端口设置到传输控制块中，设置IP首部选项部分长度，
+	// 初始化对端MSS的上限值。
 	inet->inet_dport = usin->sin_port;
 	sk_daddr_set(sk, daddr);
 
+	// 设置IP首部选项部分长度，初始化对端MSS的上限值。
 	inet_csk(sk)->icsk_ext_hdr_len = 0;
 	if (inet_opt)
 		inet_csk(sk)->icsk_ext_hdr_len = inet_opt->opt.optlen;
-
+	// 初始化对端MSS的上限值。
 	tp->rx_opt.mss_clamp = TCP_MSS_DEFAULT;
 
 	/* Socket identity is still unknown (sport may be zero).
@@ -273,13 +284,18 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 	 * lock select source port, enter ourselves into the hash tables and
 	 * complete initialization after this.
 	 */
+	// 将TCP状态设置为SYN_SENT，动态绑定一个本地端口，
 	tcp_set_state(sk, TCP_SYN_SENT);
+	// 并将传输控制添加到ehash散列表中。由于在动态分配端口时，如果找到的是已使用的端口，
+	// 则需在TIME_WAIT状态队列中进行相应的确认，因此调用inet_hash_connect时需用
+	// timewait传输控制块和参数管理器tcp_death_row作为参数。
 	err = inet_hash_connect(tcp_death_row, sk);
 	if (err)
 		goto failure;
 
 	sk_set_txhash(sk);
-
+	// 如果源端口或目的端口发送改变，则需要重新查找路由，并用新的路由缓存项更新
+	// SK中保存的路由缓存项。
 	rt = ip_route_newports(fl4, rt, orig_sport, orig_dport,
 			       inet->inet_sport, inet->inet_dport, sk);
 	if (IS_ERR(rt)) {
@@ -288,11 +304,15 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 		goto failure;
 	}
 	/* OK, now commit destination to socket.  */
+	// 设置GSO类型为SKB_GSO_TCPV4，并根据该传输控制块的路由输出设备特性设置
+	// 传输控制块中的目的路由网络设备的特性
 	sk->sk_gso_type = SKB_GSO_TCPV4;
 	sk_setup_caps(sk, &rt->dst);
 	rt = NULL;
 
 	if (likely(!tp->repair)) {
+		// 如果write_seq字段值为0，则说明该传输控制块还未设置初始序号，
+		// 因此需要调用secure_tcp_seq，根据双方的地址、端口号计算初始序号，
 		if (!tp->write_seq)
 			WRITE_ONCE(tp->write_seq,
 				   secure_tcp_seq(inet->inet_saddr,
@@ -303,14 +323,14 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 						 inet->inet_saddr,
 						 inet->inet_daddr);
 	}
-
+	// 用一个随机数设置IP首部ID域
 	inet->inet_id = prandom_u32();
 
 	if (tcp_fastopen_defer_connect(sk, &err))
 		return err;
 	if (err)
 		goto failure;
-
+	// 调用tcp_connect来构造并发送SYN段
 	err = tcp_connect(sk);
 
 	if (err)
@@ -323,6 +343,7 @@ failure:
 	 * This unhashes the socket and releases the local port,
 	 * if necessary.
 	 */
+	// 出错就讲传输控制块设置为TCP_CLOSE状态
 	tcp_set_state(sk, TCP_CLOSE);
 	ip_rt_put(rt);
 	sk->sk_route_caps = 0;

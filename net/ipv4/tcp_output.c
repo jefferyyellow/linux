@@ -3841,6 +3841,7 @@ done:
 }
 
 /* Build a SYN and send it off. */
+// 创建一个SYN包并发出去
 int tcp_connect(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -3848,29 +3849,38 @@ int tcp_connect(struct sock *sk)
 	int err;
 
 	tcp_call_bpf(sk, BPF_SOCK_OPS_TCP_CONNECT_CB, 0, NULL);
-
+	// 计算路由，如果没有路由，则返回主机不可达的错误
 	if (inet_csk(sk)->icsk_af_ops->rebuild_header(sk))
 		return -EHOSTUNREACH; /* Routing failure or similar. */
 
+	// 初始化TCP连接
 	tcp_connect_init(sk);
 
+	// 如果repair位置1，直接结束连接
 	if (unlikely(tp->repair)) {
 		tcp_finish_connect(sk, NULL);
 		return 0;
 	}
 
+	// 分配一个SKB
 	buff = tcp_stream_alloc_skb(sk, 0, sk->sk_allocation, true);
 	if (unlikely(!buff))
 		return -ENOBUFS;
 
+	// 初始化skb，并自增write_seq 的值
 	tcp_init_nondata_skb(buff, tp->write_seq++, TCPHDR_SYN);
+	// 设置时间戳
 	tcp_mstamp_refresh(tp);
 	tp->retrans_stamp = tcp_time_stamp(tp);
+	// 将当前的SKB插入到发送队列中
 	tcp_connect_queue_skb(sk, buff);
+	// ECN (Explicit Congestion Notification,)
+	// 支持显式拥塞控制
 	tcp_ecn_send_syn(sk, buff);
 	tcp_rbtree_insert(&sk->tcp_rtx_queue, buff);
 
 	/* Send off SYN; include data in Fast Open. */
+	// 发送SYN包，并且考虑快速打开的情况（就是连接建立的同事发送数据）
 	err = tp->fastopen_req ? tcp_send_syn_data(sk, buff) :
 	      tcp_transmit_skb(sk, buff, 1, sk->sk_allocation);
 	if (err == -ECONNREFUSED)
@@ -3879,9 +3889,13 @@ int tcp_connect(struct sock *sk)
 	/* We change tp->snd_nxt after the tcp_transmit_skb() call
 	 * in order to make this packet get counted in tcpOutSegs.
 	 */
+	// 我们在 tcp_transmit_skb() 调用之后更改 tp->snd_nxt为了使这个数据包被计入 tcpOutSegs
+	// send next 下一个待发送字节的序列号
 	WRITE_ONCE(tp->snd_nxt, tp->write_seq);
 	tp->pushed_seq = tp->write_seq;
+	// 这里tcp_send_head返回值为sk->sk_write_queue,也就是指向当前的将要发送的buf的位置
 	buff = tcp_send_head(sk);
+	// 修正snd_nxt和pushed_seq得值
 	if (unlikely(buff)) {
 		WRITE_ONCE(tp->snd_nxt, TCP_SKB_CB(buff)->seq);
 		tp->pushed_seq	= TCP_SKB_CB(buff)->seq;
@@ -3889,6 +3903,7 @@ int tcp_connect(struct sock *sk)
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_ACTIVEOPENS);
 
 	/* Timer for repeating the SYN until an answer. */
+	// 设置超时重传计时器
 	inet_csk_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
 				  inet_csk(sk)->icsk_rto, TCP_RTO_MAX);
 	return 0;
@@ -3952,11 +3967,13 @@ void tcp_send_delayed_ack(struct sock *sk)
 }
 
 /* This routine sends an ack and also updates the window. */
+// 该函数用于发送一个ack并且更新窗口
 void __tcp_send_ack(struct sock *sk, u32 rcv_nxt)
 {
 	struct sk_buff *buff;
 
 	/* If we have been reset, we may not send again. */
+	// 如果TCP在CLOSE状态，就不发送了
 	if (sk->sk_state == TCP_CLOSE)
 		return;
 
@@ -3964,6 +3981,7 @@ void __tcp_send_ack(struct sock *sk, u32 rcv_nxt)
 	 * tcp_transmit_skb() will set the ownership to this
 	 * sock.
 	 */
+	// 从ACK段分配一个SKB，如果分配失败则在启动延时确认定时器后返回。
 	buff = alloc_skb(MAX_TCP_HEADER,
 			 sk_gfp_mask(sk, GFP_ATOMIC | __GFP_NOWARN));
 	if (unlikely(!buff)) {
@@ -3980,7 +3998,9 @@ void __tcp_send_ack(struct sock *sk, u32 rcv_nxt)
 	}
 
 	/* Reserve space for headers and prepare control bits. */
+	// 为TCP头和控制位保留空间
 	skb_reserve(buff, MAX_TCP_HEADER);
+	// 设置TCP序号和发送时间
 	tcp_init_nondata_skb(buff, tcp_acceptable_seq(sk), TCPHDR_ACK);
 
 	/* We do not want pure acks influencing TCP Small Queues or fq/pacing
@@ -3990,10 +4010,12 @@ void __tcp_send_ack(struct sock *sk, u32 rcv_nxt)
 	skb_set_tcp_pure_ack(buff);
 
 	/* Send it off, this clears delayed acks for us. */
+	// 发送出去，并且清除延迟的确认
 	__tcp_transmit_skb(sk, buff, 0, (__force gfp_t)0, rcv_nxt);
 }
 EXPORT_SYMBOL_GPL(__tcp_send_ack);
 
+// 发送一个ACK，同时更新窗口
 void tcp_send_ack(struct sock *sk)
 {
 	__tcp_send_ack(sk, tcp_sk(sk)->rcv_nxt);
