@@ -6346,13 +6346,15 @@ consume:
 		goto discard_and_undo;
 	}
 	// 我们看到没有ACK的SYN。 它是同时连接交叉SYN的尝试。 特别是，它可以连接到自己。
+	// 处理接收没有ACK标志的SYN段，处理同时打开的情况。                                                         
 	if (th->syn) {
 		/* We see SYN without ACK. It is attempt of
 		 * simultaneous connect with crossed SYNs.
 		 * Particularly, it can be connect to self.
 		 */
+		// 在TCP_SYN_SENT状态下接收到SYN段，将其状态设置为SYN_RECV。
 		tcp_set_state(sk, TCP_SYN_RECV);
-
+		// 根据是否支持时间戳选项，设置TCP传输控制块相应的字段。
 		if (tp->rx_opt.saw_tstamp) {
 			tp->rx_opt.tstamp_ok = 1;
 			tcp_store_ts_recent(tp);
@@ -6362,6 +6364,7 @@ consume:
 			tp->tcp_header_len = sizeof(struct tcphdr);
 		}
 
+		// 初始化窗口相关的成员变量
 		WRITE_ONCE(tp->rcv_nxt, TCP_SKB_CB(skb)->seq + 1);
 		WRITE_ONCE(tp->copied_seq, tp->rcv_nxt);
 		tp->rcv_wup = TCP_SKB_CB(skb)->seq + 1;
@@ -6372,13 +6375,16 @@ consume:
 		tp->snd_wnd    = ntohs(th->window);
 		tp->snd_wl1    = TCP_SKB_CB(skb)->seq;
 		tp->max_window = tp->snd_wnd;
-
+		// 从TCP首部标志中获取支持显式拥塞通知的特性，对于支持ECN的TCP端来说，
+		// SYN段TCP首部中有设置ECE及CWR标志，接收到的段中有任何一个标志未设置，
+		// 都表示对端不支持显式拥塞通知。
 		tcp_ecn_rcv_syn(tp, th);
 
+		// 初始化PMTU、MSS等成员变量
 		tcp_mtup_init(sk);
 		tcp_sync_mss(sk, icsk->icsk_pmtu_cookie);
 		tcp_initialize_rcv_mss(sk);
-
+		// 最后发送SYN+ACK段给对端，并丢弃接收到的SYN段
 		tcp_send_synack(sk);
 #if 0
 		/* Note, we could accept data and URG from this segment.
