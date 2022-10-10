@@ -1239,6 +1239,10 @@ INDIRECT_CALLABLE_DECLARE(void tcp_v4_send_check(struct sock *sk, struct sk_buff
  * We are working here with either a clone of the original
  * SKB, or a fresh unique copy made by the retransmit engine.
  */
+// 该例程实际上传输由tcp_do_send排队的TCP数据包。这永远初始传输和以后可能的重传。
+// 这里看到的所有的SKB都是没有包头的，我们的工作就是构建TCP包头，并将数据包向下传递
+// IP，以便它可以做同样的事情，并将数据包给设备。
+// 我们使用重传引擎制作出来的一个原始的SKB或者一个克隆的SKB
 static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 			      int clone_it, gfp_t gfp_mask, u32 rcv_nxt)
 {
@@ -1256,19 +1260,25 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 
 	BUG_ON(!skb || !tcp_skb_pcount(skb));
 	tp = tcp_sk(sk);
+	// 如果拥塞控制要作时间采样，则必须设置一个瞬间戳，之后再克隆或者数据包。Linux支持多达十种拥塞控制算法，
+	// 但并不是每种算法都需要作时间采样的
 	prior_wstamp = tp->tcp_wstamp_ns;
 	tp->tcp_wstamp_ns = max(tp->tcp_wstamp_ns, tp->tcp_clock_cache);
 	skb_set_delivery_time(skb, tp->tcp_wstamp_ns, true);
+
+	// 根据参数clone_it确定是否克隆待发送的数据包
 	if (clone_it) {
 		oskb = skb;
 
 		tcp_skb_tsorted_save(oskb) {
+			// 判断待发送的数据包是否已被克隆，如果是，则只能复制SKB，注意这里用的是pskb_copy，否则可以克隆SKB
 			if (unlikely(skb_cloned(oskb)))
 				skb = pskb_copy(oskb, gfp_mask);
 			else
 				skb = skb_clone(oskb, gfp_mask);
 		} tcp_skb_tsorted_restore(oskb);
 
+		// 如果复制或克隆失败，则返回错误码ENOBUFS，表示无缓存空间。
 		if (unlikely(!skb))
 			return -ENOBUFS;
 		/* retransmit skbs might have a non zero value in skb->dev
@@ -1277,13 +1287,17 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 		skb->dev = NULL;
 	}
 
+	// 获取TCP层的传输控制块，SKB中的TCP私有控制块
 	inet = inet_sk(sk);
 	tcb = TCP_SKB_CB(skb);
 	memset(&opts, 0, sizeof(opts));
 
+	// 判断当前TCP段是不是SYN段，因为有些选项只能出现在SYN段中国呢，需作特别处理
+	// 计算选项的长度
 	if (unlikely(tcb->tcp_flags & TCPHDR_SYN)) {
 		tcp_options_size = tcp_syn_options(sk, skb, &opts, &md5);
 	} else {
+		// 
 		tcp_options_size = tcp_established_options(sk, skb, &opts,
 							   &md5);
 		/* Force a PSH flag on all (GSO) packets to expedite GRO flush
@@ -1297,6 +1311,7 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 		if (tcp_skb_pcount(skb) > 1)
 			tcb->tcp_flags |= TCPHDR_PSH;
 	}
+	// 计算TCP头的长度
 	tcp_header_size = tcp_options_size + sizeof(struct tcphdr);
 
 	/* if no packet is in qdisc/device queue, then allow XPS to select
@@ -1313,8 +1328,12 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	 * Other socket might not have SOCK_MEMALLOC.
 	 * Packets not looped back do not care about pfmemalloc.
 	 */
+	// 如果我们必须使用内存预留来分配这个 skb，如果数据包被环回，这可能会导致丢包：
+	// 其他套接字可能没有 SOCK_MEMALLOC。没有环回的数据包不关心 pfmemalloc。
 	skb->pfmemalloc = 0;
 
+	// 在报文中加入TCP首部，然后设置一些TCP首部的值
+	// 调用skb_push在数据部分头部添加TCP首部，长度就是前面计算得到的tcp_header_size，实际上就是移动data指针。
 	skb_push(skb, tcp_header_size);
 	skb_reset_transport_header(skb);
 
@@ -1326,20 +1345,26 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	skb_set_dst_pending_confirm(skb, sk->sk_dst_pending_confirm);
 
 	/* Build TCP header and checksum it. */
+	// 建立TCP头部和校验和
 	th = (struct tcphdr *)skb->data;
+	// 填充源端口、目标端口、TCP段的序号、确认序号以及各标志位。
 	th->source		= inet->inet_sport;
 	th->dest		= inet->inet_dport;
 	th->seq			= htonl(tcb->seq);
 	th->ack_seq		= htonl(rcv_nxt);
 	*(((__be16 *)th) + 6)	= htons(((tcp_header_size >> 2) << 12) |
 					tcb->tcp_flags);
-
+	// 初始化校验码和紧急指针
 	th->check		= 0;
 	th->urg_ptr		= 0;
 
 	/* The urg_mode check is necessary during a below snd_una win probe */
+	// 在下面的 snd_una win 探测期间，urg_mode 检查是必要的
+	// 判断是否需要设置紧急指针和带外数据标志位。判断条件有两个，一是发送时是否设置了紧急方式，
+	// 二是紧急指针是否在以该报文数据序号为起始的65535范围之内。其中第二个条件主要是判断紧急指针的合法性。
 	if (unlikely(tcp_urg_mode(tp) && before(tcb->seq, tp->snd_up))) {
 		if (before(tp->snd_up, tcb->seq + 0x10000)) {
+			// 设置紧急指针和带外数据标志位。
 			th->urg_ptr = htons(tp->snd_up - tcb->seq);
 			th->urg = 1;
 		} else if (after(tcb->seq + 0xFFFF, tp->snd_nxt)) {
