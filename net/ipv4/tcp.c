@@ -949,6 +949,7 @@ void tcp_remove_empty_skb(struct sock *sk)
 }
 
 /* skb changing from pure zc to mixed, must charge zc */
+// skb从纯zc变混合，必须改变其zc的标志
 static int tcp_downgrade_zcopy_pure(struct sock *sk, struct sk_buff *skb)
 {
 	if (unlikely(skb_zcopy_pure(skb))) {
@@ -1200,6 +1201,7 @@ static int tcp_sendmsg_fastopen(struct sock *sk, struct msghdr *msg,
 	return err;
 }
 
+// tcp的发送消息函数，传输控制块已加锁
 int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -1211,9 +1213,10 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	int process_backlog = 0;
 	bool zc = false;
 	long timeo;
-
+	// 获取消息的标志
 	flags = msg->msg_flags;
 
+	// 是否有零拷贝标志
 	if (flags & MSG_ZEROCOPY && size && sock_flag(sk, SOCK_ZEROCOPY)) {
 		skb = tcp_write_queue_tail(sk);
 		uarg = msg_zerocopy_realloc(sk, size, skb_zcopy(skb));
@@ -1235,7 +1238,8 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 		else if (err)
 			goto out_err;
 	}
-
+	// 获取发送数据是否进行阻塞标识，如果阻塞，则通过sock_sndtimeo获取阻塞超时时间。
+	// 发送阻塞超时时间保存在sock结构的sk_sndtimeo成员中
 	timeo = sock_sndtimeo(sk, flags & MSG_DONTWAIT);
 
 	tcp_rate_check_app_limited(sk);  /* is sending application-limited? */
@@ -1244,6 +1248,8 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	 * (passive side) where data is allowed to be sent before a connection
 	 * is fully established.
 	 */
+	// TCP只在ESTABLISHED或CLOSE_WAIT这两种状态下，接收窗口是打开的，才能接收数据。
+	// 因此如果不处于这两种状态，则调用sk_stream_wait_connect等待建立起连接
 	if (((1 << sk->sk_state) & ~(TCPF_ESTABLISHED | TCPF_CLOSE_WAIT)) &&
 	    !tcp_passive_fastopen(sk)) {
 		err = sk_stream_wait_connect(sk, &timeo);
@@ -1274,29 +1280,41 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 	}
 
 	/* This should be in poll */
+	// 清除表示异步情况下套接口发送队列已满的标志
 	sk_clear_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 
 	/* Ok commence sending. */
+	// copied是已经从用户数据复制出来的字节数
 	copied = 0;
 
 restart:
+	// 调用tcp_send_mss获取当前有效的mss
+	// 获取发送数据报到达网络设备时数据段的最大长度，该长度用来分割数据，TCP发送段时，
+	// 每个SKB的大小不能超过该值。在不支持GSO情况下，xmit_size_goal就等于MSS，而如果支持GSO，
+	// 则xmit_size_goal会是mss的整数倍。数据报发送到网络设备后再由网络设备根据MSS进行分割。
 	mss_now = tcp_send_mss(sk, &size_goal, flags);
-
+	// 在开始分段前，先初始化错误码为EPIPE，然后判断此时套接字是否存在错误，
+	// 以及该套接口是否允许发送数据，则跳转到do_error处做处理。
 	err = -EPIPE;
 	if (sk->sk_err || (sk->sk_shutdown & SEND_SHUTDOWN))
 		goto do_error;
 
+	// 不断循环，将用户想要发送的东西全部发出去
+	// msg的数据长度不为零，就继续发送
 	while (msg_data_left(msg)) {
+		// copy代表本次需要从用户数据块中复制的数据量
 		int copy = 0;
-
+		// 得到队尾的SKB，并判断SKB剩余能携带的数据量
 		skb = tcp_write_queue_tail(sk);
 		if (skb)
 			copy = size_goal - skb->len;
 
+		// 如果没法携带数据了，或者标志一个记录的结束（skb的eor被置位）
 		if (copy <= 0 || !tcp_skb_can_collapse_to(skb)) {
 			bool first_skb;
 
 new_segment:
+			// 判断socke是否有剩余的发送缓存
 			if (!sk_stream_memory_free(sk))
 				goto wait_for_space;
 
@@ -1305,7 +1323,9 @@ new_segment:
 				if (sk_flush_backlog(sk))
 					goto restart;
 			}
+
 			first_skb = tcp_rtx_and_write_queues_empty(sk);
+			// 分配一个新的skb
 			skb = tcp_stream_alloc_skb(sk, 0, sk->sk_allocation,
 						   first_skb);
 			if (!skb)
@@ -1313,6 +1333,7 @@ new_segment:
 
 			process_backlog++;
 
+			// 将新的skb放到队尾，并设定copy的值
 			tcp_skb_entail(sk, skb);
 			copy = size_goal;
 
@@ -1325,32 +1346,42 @@ new_segment:
 		}
 
 		/* Try to append data to the end of skb. */
+		// 尝试将数据附加到最后的skb的尾部
 		if (copy > msg_data_left(msg))
 			copy = msg_data_left(msg);
 
+		// 非零拷贝处理
 		if (!zc) {
 			bool merge = true;
+			// 获取当前SKB的分散分段数i
 			int i = skb_shinfo(skb)->nr_frags;
+			// 得到最后一个分片页面的page
 			struct page_frag *pfrag = sk_page_frag(sk);
-
+			// 判断当前页是否有空间可写；如果没有则申请新页，申请不到则需要等待有内存可用
 			if (!sk_page_frag_refill(sk, pfrag))
 				goto wait_for_space;
-
+			// 判断最后一个分页是否能追加数据，skb_can_coalesce用来判断该SKB上分散聚合页是否有效，
+			// 能否将数据添加到该页面上
 			if (!skb_can_coalesce(skb, i, pfrag->page,
 					      pfrag->offset)) {
+				// 页数量超过限制
 				if (i >= sysctl_max_skb_frags) {
+					// 将当前的skb设置为PSH标志
 					tcp_mark_push(tp, skb);
+					// 无法设置分配，就重新分配一个SKB
 					goto new_segment;
 				}
+				//不合并，因为当前页是skb_shinfo(skb)->frags数组最后的成员且无空间可写
 				merge = false;
 			}
 
 			copy = min_t(int, copy, pfrag->size - pfrag->offset);
-
+			// skb从纯zc变混合，必须改变其zc的标志，
+			// 或者输出使用的缓存已经到达上限，一旦达到则只能等待，知道有可用的输出缓存或者超时为止
 			if (tcp_downgrade_zcopy_pure(sk, skb) ||
 			    !sk_wmem_schedule(sk, copy))
 				goto wait_for_space;
-
+			// skb已经装备好了，无论是以前存在的，还是新分配的，调用skb_copy_to_page_nocache将数据拷贝到分页中。
 			err = skb_copy_to_page_nocache(sk, &msg->msg_iter, skb,
 						       pfrag->page,
 						       pfrag->offset,
@@ -1359,21 +1390,28 @@ new_segment:
 				goto do_error;
 
 			/* Update the skb. */
+			//没有申请新页
 			if (merge) {
+				// 在最后一个页面分段中追加的，则需更新该页面内的有效数据的长度
 				skb_frag_size_add(&skb_shinfo(skb)->frags[i - 1], copy);
 			} else {
+				// 复制到一个新的页面分段中，更新分段数据的长度，页内偏移，分段数量等。
 				skb_fill_page_desc(skb, i, pfrag->page,
 						   pfrag->offset, copy);
+				// 增加页面的引用
 				page_ref_inc(pfrag->page);
 			}
+			// 增加偏移
 			pfrag->offset += copy;
 		} else {
 			/* First append to a fragless skb builds initial
 			 * pure zerocopy skb
 			 */
+			// 首先附加到无碎片的skb构建器初始纯的“零拷贝”的skb
 			if (!skb->len)
 				skb_shinfo(skb)->flags |= SKBFL_PURE_ZEROCOPY;
 
+			// 不是纯的“零拷贝”skb
 			if (!skb_zcopy_pure(skb)) {
 				if (!sk_wmem_schedule(sk, copy))
 					goto wait_for_space;
@@ -1389,14 +1427,17 @@ new_segment:
 			copy = err;
 		}
 
+		// 如果复制的数据为零，就将TCPHDR_PSH去掉
 		if (!copied)
 			TCP_SKB_CB(skb)->tcp_flags &= ~TCPHDR_PSH;
 
+		// 更新发送队列中的最后一个序号write_seq以及每个数据包的最后一个序列end_seq
 		WRITE_ONCE(tp->write_seq, tp->write_seq + copy);
 		TCP_SKB_CB(skb)->end_seq += copy;
 		tcp_skb_pcount_set(skb, 0);
-
+		// 增加已经拷贝的数量
 		copied += copy;
+		// 如果不剩数据了，直接跳out
 		if (!msg_data_left(msg)) {
 			if (unlikely(flags & MSG_EOR))
 				TCP_SKB_CB(skb)->eor = 1;
@@ -1405,8 +1446,9 @@ new_segment:
 
 		if (skb->len < size_goal || (flags & MSG_OOB) || unlikely(tp->repair))
 			continue;
-
+		// 检查该数据是否必须马上发送
 		if (forced_push(tp)) {
+			// 如果需要立即发送，则调用相关函数将队列中的数据都发出去
 			tcp_mark_push(tp, skb);
 			__tcp_push_pending_frames(sk, mss_now, TCP_NAGLE_PUSH);
 		} else if (skb == tcp_send_head(sk))
@@ -1414,7 +1456,9 @@ new_segment:
 		continue;
 
 wait_for_space:
+		// 设置当前为无空间状态，并等待内存空间
 		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+		// 如果已经复制了一定的数据了，那么将数据先发出去
 		if (copied)
 			tcp_push(sk, flags & ~MSG_MORE, mss_now,
 				 TCP_NAGLE_PUSH, size_goal);
@@ -1427,21 +1471,25 @@ wait_for_space:
 	}
 
 out:
+	// 如果发生了超时或者要正常退出，且已经拷贝了数据，那么尝试将该数据发出
 	if (copied) {
 		tcp_tx_timestamp(sk, sockc.tsflags);
 		tcp_push(sk, flags, mss_now, tp->nonagle, size_goal);
 	}
 out_nopush:
 	net_zcopy_put(uarg);
+	// 返回已经发出的数据量
 	return copied + copied_syn;
 
 do_error:
+	// 移除空的skb
 	tcp_remove_empty_skb(sk);
-
+	// 如果已经拷贝了数据，那么，就将其发出
 	if (copied + copied_syn)
 		goto out;
 out_err:
 	net_zcopy_put_abort(uarg, true);
+	// 获取并返回错误码
 	err = sk_stream_error(sk, flags, err);
 	/* make sure we wake any epoll edge trigger waiter */
 	if (unlikely(tcp_rtx_and_write_queues_empty(sk) && err == -EAGAIN)) {
@@ -1451,11 +1499,12 @@ out_err:
 	return err;
 }
 EXPORT_SYMBOL_GPL(tcp_sendmsg_locked);
-
+// 发送数据的传输层实现
 int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 {
 	int ret;
-
+	// 锁定传输控制块，在发送和接收TCP数据前都需要对传输控制块上锁，
+	// 以免应用程序主动发送，接收和传输控制块被动接收而导致控制块中的发送或接收队列混乱。
 	lock_sock(sk);
 	ret = tcp_sendmsg_locked(sk, msg, size);
 	release_sock(sk);

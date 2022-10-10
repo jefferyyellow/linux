@@ -915,6 +915,7 @@ static unsigned int tcp_synack_options(const struct sock *sk,
 /* Compute TCP options for ESTABLISHED sockets. This is not the
  * final wire format yet.
  */
+// 计算ESTABLISHED套接字的TCP选项。 这不是最终的格式。
 static unsigned int tcp_established_options(struct sock *sk, struct sk_buff *skb,
 					struct tcp_out_options *opts,
 					struct tcp_md5sig_key **md5)
@@ -1821,6 +1822,7 @@ EXPORT_SYMBOL(tcp_mtup_init);
    NOTE2. inet_csk(sk)->icsk_pmtu_cookie and tp->mss_cache
    are READ ONLY outside this function.		--ANK (980731)
  */
+// 此函数同步snd mss到当前的pmtu和exthdr集合
 unsigned int tcp_sync_mss(struct sock *sk, u32 pmtu)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -1834,6 +1836,7 @@ unsigned int tcp_sync_mss(struct sock *sk, u32 pmtu)
 	mss_now = tcp_bound_to_half_wnd(tp, mss_now);
 
 	/* And store cached results */
+	// 保存缓存结果
 	icsk->icsk_pmtu_cookie = pmtu;
 	if (icsk->icsk_mtup.enabled)
 		mss_now = min(mss_now, tcp_mtu_to_mss(sk, icsk->icsk_mtup.search_low));
@@ -1846,29 +1849,38 @@ EXPORT_SYMBOL(tcp_sync_mss);
 /* Compute the current effective MSS, taking SACKs and IP options,
  * and even PMTU discovery events into account.
  */
+// 计算当前有效的MSS，需考虑TCP首部中的SACK选项和IP选项，以及PMTU
 unsigned int tcp_current_mss(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
+	// 获取套接口的路由缓存项，用来从中取出PMTU
 	const struct dst_entry *dst = __sk_dst_get(sk);
 	u32 mss_now;
 	unsigned int header_len;
 	struct tcp_out_options opts;
 	struct tcp_md5sig_key *md5;
-
+	// 以当前有效MSS初始化mss_now变量，用于后续计算，后面还需要刷新回去
 	mss_now = tp->mss_cache;
 
+	// 如果获取到该套接口的路由，则从中取出PMTU与最近一次更新的路径MTU比较，
+	// 如果不相等，即更新icsk_pmtu_cookie和当前有效MSS
 	if (dst) {
 		u32 mtu = dst_mtu(dst);
 		if (mtu != inet_csk(sk)->icsk_pmtu_cookie)
 			mss_now = tcp_sync_mss(sk, mtu);
 	}
 
+	// 计算tcp首部的长度
 	header_len = tcp_established_options(sk, NULL, &opts, &md5) +
 		     sizeof(struct tcphdr);
 	/* The mss_cache is sized based on tp->tcp_header_len, which assumes
 	 * some common options. If this is an odd packet (because we have SACK
 	 * blocks etc) then our calculated header_len will be different, and
 	 * we have to adjust mss_now correspondingly */
+	// mss_cache的大小基于tp->tcp_header_len，它假定了一些常用选项。 
+	// 如果这是一个奇怪的数据包（因为我们有SACK块等），
+	// 那么我们计算的header_len将是不同的，我们必须相应地调整mss_now
+	// 如果TCP首部的长度和现在的首部长度不相等，减去变化的长度
 	if (header_len != tp->tcp_header_len) {
 		int delta = (int) header_len - tp->tcp_header_len;
 		mss_now -= delta;

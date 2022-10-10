@@ -2678,6 +2678,8 @@ static inline void sk_stream_moderate_sndbuf(struct sock *sk)
  * Return: a per task page_frag if context allows that,
  * otherwise a per socket one.
  */
+// 返回一个合适的page_frag
+// 返回值：如果上下文允许，每个任务一个，否则每个socket一个
 static inline struct page_frag *sk_page_frag(struct sock *sk)
 {
 	if ((sk->sk_allocation & (__GFP_DIRECT_RECLAIM | __GFP_MEMALLOC | __GFP_FS)) ==

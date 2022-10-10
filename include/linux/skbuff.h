@@ -560,6 +560,7 @@ static inline void skb_frag_size_set(skb_frag_t *frag, unsigned int size)
  * @frag: skb fragment
  * @delta: value to add
  */
+// 增加skb页面分段的大小
 static inline void skb_frag_size_add(skb_frag_t *frag, int delta)
 {
 	frag->bv_len += delta;
