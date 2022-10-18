@@ -1810,12 +1810,20 @@ tcp_sacktag_write_queue(struct sock *sk, const struct sk_buff *ack_skb,
 			u32 prior_snd_una, struct tcp_sacktag_state *state)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
+	// 在接收TCP段之初解析TCP选项时，对SACK选项的处理时很简单的，只是在SKB的TCP层TCP_SKB_CB字段
+	// sacked中保存了SACK选项在TCP首部中的偏移。因此在此，可以根据偏移得出SACK选项的地址，已经SACK块数。
+	// 得出num_sacks
+	// 首先得到sack option的起始指针
 	const unsigned char *ptr = (skb_transport_header(ack_skb) +
 				    TCP_SKB_CB(ack_skb)->sacked);
+	// 加2的意思是加上类型和长度，这里刚好2个字节，最终结果也就是sack option的数据段。
 	struct tcp_sack_block_wire *sp_wire = (struct tcp_sack_block_wire *)(ptr+2);
 	struct tcp_sack_block sp[TCP_NUM_SACKS];
 	struct tcp_sack_block *cache;
 	struct sk_buff *skb;
+	// 得到当前的SACK段的个数，这里的这里ptr[1]也就是sack option的长度(字节数),而TCPOLEN_SACK_BASE
+	// 为类型和长度字段的长度，因此这两个值的差也就是sack的总长度，而这里每个段读书8个字节，因此我们右移3位
+	// 就得到了它的个数，最后sack段的长度不能大于4，因此我们要取一个最小的值。
 	int num_sacks = min(TCP_NUM_SACKS, (ptr[1] - TCPOLEN_SACK_BASE) >> 3);
 	int used_sacks;
 	bool found_dup_sack = false;
@@ -1824,7 +1832,8 @@ tcp_sacktag_write_queue(struct sock *sk, const struct sk_buff *ack_skb,
 
 	state->flag = 0;
 	state->reord = tp->snd_nxt;
-
+	// 因为fackets_out是基于sacked_out的，因此如果对方支持SACK选项且sacked_out为零，
+	// 则fackets_out也必定为零。
 	if (!tp->sacked_out)
 		tcp_highest_sack_reset(sk);
 
