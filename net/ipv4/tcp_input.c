@@ -3536,20 +3536,35 @@ static void tcp_rcv_nxt_update(struct tcp_sock *tp, u32 seq)
  * Window update algorithm, described in RFC793/RFC1122 (used in linux-2.2
  * and in FreeBSD. NetBSD's one is even worse.) is wrong.
  */
+// 更新发送窗口
+// skb：接收到的ack段
+// ack：Ack段中的序号
+// ack_seq：Ack段中的确认序号
 static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32 ack,
 				 u32 ack_seq)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	int flag = 0;
+	// 从TCP首部中获取接收方接收窗口大小，并由窗口扩大因子计算出接收窗口的字节数
 	u32 nwin = ntohs(tcp_hdr(skb)->window);
-
 	if (likely(!tcp_hdr(skb)->syn))
 		nwin <<= tp->rx_opt.snd_wscale;
 
+	// 通过ack的序号和确认序号，以及接收方的接收窗口判断是否需要更新发送方的发送窗口
+	// tcp_may_update_window用来判断是否可以更新发送窗口，只需要满足以下三个条件之一便可以更新：
+	// 1.确认的序号在发送窗口的snd.una和snd.nxt之间
+	// 2.Ack的序号是最新的
+	// 3.接收到重复的ACK，并且接收方的接收窗口大衣当前发送方的发送窗口（可能是带有数据的TCP段）
 	if (tcp_may_update_window(tp, ack, ack_seq, nwin)) {
+		// 由于当前ACK可以更新发送窗口，因此需添加FLAG_WIN_UPDATE标志
 		flag |= FLAG_WIN_UPDATE;
+		// 记录最新的ACK序号到snd_wl1中
 		tcp_update_wl(tp, ack_seq);
 
+		// 如果接收方的接收窗口与发送方的发送窗口不等，则以接收方的接收窗口更新发送方的发送窗口。
+		// 由于用于首部预测的标记与接收窗口的大小有关，因此需清零预测标志，然后调用tcp_fast_path_check()
+		// 在满足条件的情况下重新计算首部预测标志。如果接收方的接收窗口大于之前的最大接收窗口，则更新发送方发送窗口，
+		// 同时重新计算MSS。
 		if (tp->snd_wnd != nwin) {
 			tp->snd_wnd = nwin;
 
@@ -3569,6 +3584,7 @@ static int tcp_ack_update_window(struct sock *sk, const struct sk_buff *skb, u32
 		}
 	}
 
+	// 更新发送窗口的左端，即snd.una
 	tcp_snd_una_update(tp, ack);
 
 	return flag;
