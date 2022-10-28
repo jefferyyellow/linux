@@ -1964,6 +1964,8 @@ static inline struct sk_buff *tcp_highest_sack(struct sock *sk)
 	return tcp_sk(sk)->highest_sack;
 }
 
+// 重置highest_sack
+// 因为当sacked_out为0,则说明没有通过sack确认的段，此时highest_sack自然就指向写队列的头
 static inline void tcp_highest_sack_reset(struct sock *sk)
 {
 	tcp_sk(sk)->highest_sack = tcp_rtx_queue_head(sk);

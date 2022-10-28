@@ -64,14 +64,17 @@ struct tcp_fastopen_cookie {
 };
 
 /* This defines a selective acknowledgement block. */
+// 和tcp_sack_block结构一样...
 struct tcp_sack_block_wire {
 	__be32	start_seq;
 	__be32	end_seq;
 };
 
+// SACK是包含在tcp的option中的，由于tcp的头的长度的限制，
+// 因此SACK也就是最多包含4个段，也就是32个字节。我们先来看tcp中的SACK段的表示：
 struct tcp_sack_block {
-	u32	start_seq;
-	u32	end_seq;
+	u32	start_seq;			// 起始序列号
+	u32	end_seq;			// 结束序列号
 };
 
 /*These are used to set the sack_ok field in struct tcp_options_received */
@@ -436,7 +439,7 @@ struct tcp_sock {
 	struct tcp_sack_block selective_acks[4]; /* The SACKS themselves*/
 	// 存储接收到的SACK选项信息
 	struct tcp_sack_block recv_sack_cache[4];
-
+	// 这个域也就是被sack确认的最大序号的skb
 	struct sk_buff *highest_sack;   /* skb just after the highest
 					 * skb with SACKed bit set
 					 * (validity guaranteed only if
@@ -450,6 +453,7 @@ struct tcp_sock {
 	// 被设置为0时，表示禁止拥塞窗口的撤销。
 	u32	prior_ssthresh; /* ssthresh saved at recovery start	*/
 	// 记录发送拥塞时的SND.NXT,标识重传队列的尾部。
+	// 这个字段是我们进入拥塞控制的时候最大的发送序列号，也就是snd_nxt.
 	u32	high_seq;	/* snd_nxt at onset of congestion	*/
 	// 在主动连接时，记录第一个SYN段的发送时间，用来检测ACK序号是否回绕。
 	// 在数据传输阶段，当发送超时重传时，记录上次重传阶段第一个重传段的发送时间，

@@ -614,6 +614,7 @@ static void tcp_options_write(struct tcphdr *th, struct tcp_sock *tp,
 	__be32 *ptr = (__be32 *)(th + 1);
 	u16 options = opts->options;	/* mungable copy */
 
+	// 与通过TCP MD5签名来保护BGP会话操作有关
 	if (unlikely(OPTION_MD5 & options)) {
 		*ptr++ = htonl((TCPOPT_NOP << 24) | (TCPOPT_NOP << 16) |
 			       (TCPOPT_MD5SIG << 8) | TCPOLEN_MD5SIG);
@@ -622,13 +623,17 @@ static void tcp_options_write(struct tcphdr *th, struct tcp_sock *tp,
 		ptr += 4;
 	}
 
+	// 组成MSS选项，在建立一个TCP连接的时候，连接双方都需通告对方各自的MSS，
+	// 因此SYN或SYN+ACK段中通常总会有MSS选项，如果没有则默认为536B。
 	if (unlikely(opts->mss)) {
 		*ptr++ = htonl((TCPOPT_MSS << 24) |
 			       (TCPOLEN_MSS << 16) |
 			       opts->mss);
 	}
 
+	// 如果启用TCP时间戳，则能把时间戳选项加入到TCP选项中，
 	if (likely(OPTION_TS & options)) {
+		// 如果启用了SACK，则把SACK允许选项加入到TCP选项中。
 		if (unlikely(OPTION_SACK_ADVERTISE & options)) {
 			*ptr++ = htonl((TCPOPT_SACK_PERM << 24) |
 				       (TCPOLEN_SACK_PERM << 16) |
@@ -636,49 +641,68 @@ static void tcp_options_write(struct tcphdr *th, struct tcp_sock *tp,
 				       TCPOLEN_TIMESTAMP);
 			options &= ~OPTION_SACK_ADVERTISE;
 		} else {
+			// 如果允许了时间戳选项但不允许SACK选项
 			*ptr++ = htonl((TCPOPT_NOP << 24) |
 				       (TCPOPT_NOP << 16) |
 				       (TCPOPT_TIMESTAMP << 8) |
 				       TCPOLEN_TIMESTAMP);
 		}
+		// 继续填充时间戳值和时间戳回显应答
 		*ptr++ = htonl(opts->tsval);
 		*ptr++ = htonl(opts->tsecr);
 	}
 
+	// 如果不允许时间戳选项但允许SACK
 	if (unlikely(OPTION_SACK_ADVERTISE & options)) {
 		*ptr++ = htonl((TCPOPT_NOP << 24) |
 			       (TCPOPT_NOP << 16) |
 			       (TCPOPT_SACK_PERM << 8) |
 			       TCPOLEN_SACK_PERM);
 	}
-
+	// 如果允许窗口缩放，填充窗口扩大因子选项
 	if (unlikely(OPTION_WSCALE & options)) {
 		*ptr++ = htonl((TCPOPT_NOP << 24) |
 			       (TCPOPT_WINDOW << 16) |
 			       (TCPOLEN_WINDOW << 8) |
 			       opts->ws);
 	}
-
+	// SACK(Selective ACK)是TCP选项，它使得接收方能告诉发送方哪些报文段丢失，哪些报文段重传了，
+	// 哪些报文段已经提前收到等信息。根据这些信息TCP就可以只重传哪些真正丢失的报文段。
+	// 需要注意的是只有收到失序的分组时才会可能会发送SACK，TCP的ACK还是建立在累积确认的基础上的。
+	// 也就是说如果收到的报文段与期望收到的报文段的序号相同就会发送累积的ACK，
+	// SACK只是针对失序到达的报文段的。SACK包括了两个TCP选项，一个选项用于标识是否支持SACK，
+	// 是在TCP连接建立时时发送；另一种选项则包含了具体的SACK信息。
+	
+	// num_sack_blocks是将要发送报文的SACK队列大小，即有多少个数据块左右边界值对。
+	// 而TCPOLEN_SACK_PERBLOCK是每个数据块左右边界值对的大小，因此TCPOLEN_SACK_BASE + (opts->num_sack_blocks * TCPOLEN_SACK_PERBLOCK)
+	// 是计算SACK选项的总长度。
 	if (unlikely(opts->num_sack_blocks)) {
+		// 如果有dsack，sp指向DSACK信息块，否则指向普通SACK信息块
 		struct tcp_sack_block *sp = tp->rx_opt.dsack ?
 			tp->duplicate_sack : tp->selective_acks;
 		int this_sack;
-
+		// 填充位、类型、长度
 		*ptr++ = htonl((TCPOPT_NOP  << 24) |
 			       (TCPOPT_NOP  << 16) |
 			       (TCPOPT_SACK <<  8) |
 			       (TCPOLEN_SACK_BASE + (opts->num_sack_blocks *
 						     TCPOLEN_SACK_PERBLOCK)));
-
+		// 这里实际利用了struct tcp_sock中duplicate_sack和selective_acks紧邻这一前提，
+		// eff_sacks已经考虑了dsack和sack，所以当填充了dsack后，紧接着就可以填充sack。
 		for (this_sack = 0; this_sack < opts->num_sack_blocks;
 		     ++this_sack) {
 			*ptr++ = htonl(sp[this_sack].start_seq);
 			*ptr++ = htonl(sp[this_sack].end_seq);
 		}
-
+		// dsack选项一旦发送之后就会被清除，如果再次收到重复段，才会重新生成。但是普通的SACK选项
+		// 即使发送过了，也不会清除，所以下次发送只要没有清除就还会携带。
 		tp->rx_opt.dsack = 0;
 	}
 
+	// 是否有fast open cookie的选项
+	// TFO的核心是一个安全cookie，服务器使用这个cookie来给客户端鉴权。一般来说这个cookie应该能鉴权SYN包中的源IP地址，
+	// 不包含端口（client每次的端口都可能不同），并且不能被第三方伪造。为了保证安全，过一段时间后，server应该expire之前的cookie，
+	// 并重新生成cookie。cookie验证通过，server在发送SYN-ACK的时候，如果有待发送数据也同样可以携带数据。
 	if (unlikely(OPTION_FAST_OPEN_COOKIE & options)) {
 		struct tcp_fastopen_cookie *foc = opts->fastopen_cookie;
 		u8 *p = (u8 *)ptr;
@@ -703,8 +727,9 @@ static void tcp_options_write(struct tcphdr *th, struct tcp_sock *tp,
 		ptr += (len + 3) >> 2;
 	}
 
+	// 处理SMC选项
 	smc_options_write(ptr, &options);
-
+	// 处理多路径Tcp选项
 	mptcp_options_write(th, ptr, tp, opts);
 }
 
@@ -1374,20 +1399,24 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 		}
 	}
 
+	// 设置gso的类型
 	skb_shinfo(skb)->gso_type = sk->sk_gso_type;
 	if (likely(!(tcb->tcp_flags & TCPHDR_SYN))) {
+		// 如果不是SYN段，则调用tcp_select_window计算当前接收窗口的大小
 		th->window      = htons(tcp_select_window(sk));
 		tcp_ecn_send(sk, skb, th, tcp_header_size);
 	} else {
 		/* RFC1323: The window in SYN & SYN/ACK segments
 		 * is never scaled.
 		 */
+		// 如果是SYN段，则设置接收窗口初始值为rev_wnd
 		th->window	= htons(min(tp->rcv_wnd, 65535U));
 	}
-
+	// 构建TCP首部选项
 	tcp_options_write(th, tp, &opts);
 
 #ifdef CONFIG_TCP_MD5SIG
+	// 通过TCP MD5签名来保护BGP会话操作相关
 	/* Calculate the MD5 hash, as we have all we need now */
 	if (md5) {
 		sk_gso_disable(sk);
@@ -1397,15 +1426,21 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 #endif
 
 	/* BPF prog is the last one writing header option */
+	// BPF prog是最后一个写入的TCP头的选项
 	bpf_skops_write_hdr_opt(sk, skb, NULL, NULL, 0, &opts);
 
+	// 调用IPv4或IPv6的send_check执行校验和，并设置到TCP首部中
 	INDIRECT_CALL_INET(icsk->icsk_af_ops->send_check,
 			   tcp_v6_send_check, tcp_v4_send_check,
 			   sk, skb);
 
+	// 如果发出去的段有ACK标志，则需要通知延时确认模块，
+	// 递减快速发送ACK的数量，同时停止延时确认计时器
 	if (likely(tcb->tcp_flags & TCPHDR_ACK))
 		tcp_event_ack_sent(sk, tcp_skb_pcount(skb), rcv_nxt);
 
+	// 如果发送出去的TCP段有负载，则检测拥塞窗口闲置是否超时，并使其失效。
+	// 同时记录发送TCP的时间，根据最近接收段的时间确定本端延时确认是否进入pingpong模式。
 	if (skb->len != tcp_header_size) {
 		tcp_event_data_sent(tp, sk);
 		tp->data_segs_out += tcp_skb_pcount(skb);
@@ -1419,21 +1454,25 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 	tp->segs_out += tcp_skb_pcount(skb);
 	skb_set_hash_from_sk(skb, sk);
 	/* OK, its time to fill skb_shinfo(skb)->gso_{segs|size} */
+	// 设置gso的信息
 	skb_shinfo(skb)->gso_segs = tcp_skb_pcount(skb);
 	skb_shinfo(skb)->gso_size = tcp_skb_mss(skb);
 
 	/* Leave earliest departure time in skb->tstamp (skb->skb_mstamp_ns) */
 
 	/* Cleanup our debris for IP stacks */
+	//清理IP栈的碎片
 	memset(skb->cb, 0, max(sizeof(struct inet_skb_parm),
 			       sizeof(struct inet6_skb_parm)));
 
 	tcp_add_tx_delay(skb, tp);
 
+	// 调用发送接口queue_xmit发送报文，如果失败则返回错误码。
 	err = INDIRECT_CALL_INET(icsk->icsk_af_ops->queue_xmit,
 				 inet6_csk_xmit, ip_queue_xmit,
 				 sk, skb, &inet->cork.fl);
 
+	// 如果发送失败时，类似接收到显式的拥塞通知，使拥塞控制进入CWR状态
 	if (unlikely(err > 0)) {
 		tcp_enter_cwr(sk);
 		err = net_xmit_eval(err);
@@ -1752,6 +1791,7 @@ static inline int __tcp_mtu_to_mss(struct sock *sk, int pmtu)
 }
 
 /* Calculate MSS. Not accounting for SACKs here.  */
+// 通过MTU计算MSS，即(MTU-TCP首部-TCP选项-IP首部-IP选项)
 int tcp_mtu_to_mss(struct sock *sk, int pmtu)
 {
 	/* Subtract TCP options size, not including SACKs */
@@ -1761,6 +1801,7 @@ int tcp_mtu_to_mss(struct sock *sk, int pmtu)
 EXPORT_SYMBOL(tcp_mtu_to_mss);
 
 /* Inverse of above */
+// 将MSS转化为MTU，即(MSS+TCP首部+TCP选项+IP首部+IP选项)
 int tcp_mss_to_mtu(struct sock *sk, int mss)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
@@ -2369,6 +2410,12 @@ static bool tcp_can_coalesce_send_queue_head(struct sock *sk, int len)
  *         1 if a probe was sent,
  *         -1 otherwise
  */
+// 如果我们准备好了就创建一个新的MTU探测包
+// MTU探测定期尝试通过故意发送更大的数据包来增加路径MTU。这个发现函数在更大的路径MTU时更改结果。
+// 返回值	描述
+// 0		表示没有拥塞窗口可以使用，需延迟发送
+// 1		已发送路径MTU发现段
+// -1		其他情况
 static int tcp_mtu_probe(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -2386,6 +2433,11 @@ static int tcp_mtu_probe(struct sock *sk)
 	 * have enough cwnd, and
 	 * not SACKing (the variable headers throw things off)
 	 */
+	// 1.未启用路径MTU
+	// 2.当前路径MTU探测段的长度不为0，表示路径MTU发现段已经发出尚未得到确认。
+	// 3.拥塞控制状态不处于Open状态
+	// 4.拥塞窗口大小不足使用时
+	// 5.下一个发送的段中存在SACK选项
 	if (likely(!icsk->icsk_mtup.enabled ||
 		   icsk->icsk_mtup.probe_size ||
 		   inet_csk(sk)->icsk_ca_state != TCP_CA_Open ||
@@ -2397,6 +2449,7 @@ static int tcp_mtu_probe(struct sock *sk)
 	 * and current mss_clamp. if (search_high - search_low)
 	 * smaller than a threshold, backoff from probing.
 	 */
+	// 在tcp_mss_base和当前mss_clamp之间使用二分查找probe_size。 如果(search_high - search_low)小于阈值，则回退探测。
 	mss_now = tcp_current_mss(sk);
 	probe_size = tcp_mtu_to_mss(sk, (icsk->icsk_mtup.search_high +
 				    icsk->icsk_mtup.search_low) >> 1);
@@ -2406,25 +2459,30 @@ static int tcp_mtu_probe(struct sock *sk)
 	 * and then reprobe timer has expired. We stick with current
 	 * probing process by not resetting search range to its orignal.
 	 */
+	// 如果该段长度大于路径MTU发现段段长的上限，则不能进行路径MTU的探测。
 	if (probe_size > tcp_mtu_to_mss(sk, icsk->icsk_mtup.search_high) ||
 		interval < net->ipv4.sysctl_tcp_probe_threshold) {
 		/* Check whether enough time has elaplased for
 		 * another round of probing.
 		 */
+		// 检查是否有足够的时间进行另一轮探测
 		tcp_mtu_check_reprobe(sk);
 		return -1;
 	}
 
 	/* Have enough data in the send queue to probe? */
+	// 检测发送队列中是否存在足够的数据用于MTU探测
 	if (tp->write_seq - tp->snd_nxt < size_needed)
 		return -1;
 
+	// 检测对方的接收窗口是否有足够的空间用来接收路径MTU的探测段
 	if (tp->snd_wnd < size_needed)
 		return -1;
 	if (after(tp->snd_nxt + size_needed, tcp_wnd_end(tp)))
 		return 0;
 
 	/* Do we need to wait to drain cwnd? With none in flight, don't stall */
+	// 检测拥塞窗口是否被耗尽
 	if (tcp_packets_in_flight(tp) + 2 > tcp_snd_cwnd(tp)) {
 		if (!tcp_packets_in_flight(tp))
 			return -1;
@@ -2436,16 +2494,18 @@ static int tcp_mtu_probe(struct sock *sk)
 		return -1;
 
 	/* We're allowed to probe.  Build it now. */
+	// 所有的检测通过以后，需要为路径MTU探测段分配SKB，并插入到发送队列的队首。然后设置SKB中TCP控制块的相关值
 	nskb = tcp_stream_alloc_skb(sk, probe_size, GFP_ATOMIC, false);
 	if (!nskb)
 		return -1;
+	// 将分配好的SKB，并插入到发送队列的队首。然后设置SKB中TCP控制块的相关值
 	sk_wmem_queued_add(sk, nskb->truesize);
 	sk_mem_charge(sk, nskb->truesize);
 
 	skb = tcp_send_head(sk);
 	skb_copy_decrypted(nskb, skb);
 	mptcp_skb_ext_copy(nskb, skb);
-
+	// 设置skb中TCP控制块的相关值
 	TCP_SKB_CB(nskb)->seq = TCP_SKB_CB(skb)->seq;
 	TCP_SKB_CB(nskb)->end_seq = TCP_SKB_CB(skb)->seq + probe_size;
 	TCP_SKB_CB(nskb)->tcp_flags = TCPHDR_ACK;
@@ -2454,6 +2514,7 @@ static int tcp_mtu_probe(struct sock *sk)
 	tcp_highest_sack_replace(sk, skb, nskb);
 
 	len = 0;
+	// 将发送队列中路径MTU探测段后的SKB中的数据复制到路径MTU探测段中，并释放已被复制的SKB。
 	tcp_for_write_queue_from_safe(skb, next, sk) {
 		copy = min_t(int, skb->len, probe_size - len);
 		skb_copy_bits(skb, 0, skb_put(nskb, copy), copy);
@@ -2491,6 +2552,7 @@ static int tcp_mtu_probe(struct sock *sk)
 	/* We're ready to send.  If this fails, the probe will
 	 * be resegmented into mss-sized pieces by tcp_write_xmit().
 	 */
+	// 最后将该路径MTU探测段输出，并记录路径MTU探测段的序号，以便之后用来确认路径MTU探测成功与否。
 	if (!tcp_transmit_skb(sk, nskb, 1, GFP_ATOMIC)) {
 		/* Decrement cwnd here because we are sending
 		 * effectively two packets. */
@@ -2963,6 +3025,8 @@ void __tcp_push_pending_frames(struct sock *sk, unsigned int cur_mss,
 /* Send _single_ skb sitting at the send head. This function requires
  * true push pending frames to setup probe timer etc.
  */
+// 发送位于发送队列上的第一个SKB，参数mss_now为当前MSS。
+// 此函数需要真正推送未决帧来设置探测计时器等
 void tcp_push_one(struct sock *sk, unsigned int mss_now)
 {
 	struct sk_buff *skb = tcp_send_head(sk);
