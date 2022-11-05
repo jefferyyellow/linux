@@ -1864,21 +1864,27 @@ EXPORT_SYMBOL(tcp_mtup_init);
    are READ ONLY outside this function.		--ANK (980731)
  */
 // 此函数同步snd mss到当前的pmtu和exthdr集合
+// 为传输控制块中与MSS相关的成员进行数据同步
 unsigned int tcp_sync_mss(struct sock *sk, u32 pmtu)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	int mss_now;
 
+	// 如果路径MTU发现段长度上限无效，则需更新之
 	if (icsk->icsk_mtup.search_high > pmtu)
 		icsk->icsk_mtup.search_high = pmtu;
 
+	// 根据pmtu得到当前的mss，基本的计算方法是（PMTU - IP首部长度- TCP首部长度 - IP选项长度- TCP选项）
+	// 其中IP选项和TCP选项的长度可以都为0.
 	mss_now = tcp_mtu_to_mss(sk, pmtu);
+	// MSS不能超过接收方通告过的接收窗口的最大值的一半。
 	mss_now = tcp_bound_to_half_wnd(tp, mss_now);
 
 	/* And store cached results */
-	// 保存缓存结果
+	// 保存最近更新的有效PMTU
 	icsk->icsk_pmtu_cookie = pmtu;
+	// 最后将得到的MSS更新到缓存中
 	if (icsk->icsk_mtup.enabled)
 		mss_now = min(mss_now, tcp_mtu_to_mss(sk, icsk->icsk_mtup.search_low));
 	tp->mss_cache = mss_now;
@@ -3283,6 +3289,8 @@ static void tcp_retrans_try_collapse(struct sock *sk, struct sk_buff *to,
  * state updates are done by the caller.  Returns non-zero if an
  * error occurred which prevented the send.
  */
+// 该函数重传一个skb。策略决定和重传队列状态的更新都由调用者决定。
+// 如果阻止发送的错误发生将会返回一个非零值
 int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
@@ -3398,21 +3406,26 @@ int tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	int err = __tcp_retransmit_skb(sk, skb, segs);
-
+	
+	// 如果重传成功
 	if (err == 0) {
 #if FASTRETRANS_DEBUG > 0
 		if (TCP_SKB_CB(skb)->sacked & TCPCB_SACKED_RETRANS) {
 			net_dbg_ratelimited("retrans_out leaked\n");
 		}
 #endif
+		// 设置上重传的标志
 		TCP_SKB_CB(skb)->sacked |= TCPCB_RETRANS;
+		// 增加重传但是没有确认的数量
 		tp->retrans_out += tcp_skb_pcount(skb);
 	}
 
 	/* Save stamp of the first (attempted) retransmit. */
+	// 保存第一次重传的时间戳
 	if (!tp->retrans_stamp)
 		tp->retrans_stamp = tcp_skb_timestamp(skb);
 
+	// 增加可以撤销的重传的段
 	if (tp->undo_retrans < 0)
 		tp->undo_retrans = 0;
 	tp->undo_retrans += tcp_skb_pcount(skb);
