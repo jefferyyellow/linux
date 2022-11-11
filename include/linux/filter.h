@@ -593,8 +593,11 @@ struct bpf_prog {
 	};
 };
 
+// 过滤器结构
 struct sk_filter {
+	// 引用计数，可能存在多个传输层控制块共享一个过滤规则
 	refcount_t	refcnt;
+	// 卸载过滤器时，用该成员作为链表结点加入到rcu_bh_data链表中，之后在适当的时候才真正的释放
 	struct rcu_head	rcu;
 	struct bpf_prog	*prog;
 };
@@ -893,6 +896,7 @@ static inline void bpf_jit_binary_lock_ro(struct bpf_binary_header *hdr)
 }
 
 int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap);
+// 过滤执行
 static inline int sk_filter(struct sock *sk, struct sk_buff *skb)
 {
 	return sk_filter_trim_cap(sk, skb, 1);

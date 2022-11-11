@@ -119,6 +119,7 @@ EXPORT_SYMBOL_GPL(copy_bpf_fprog_from_user);
  * be accepted or -EPERM if the packet should be tossed.
  *
  */
+// 执行一个数据报通过socket过滤器
 int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 {
 	int err;
@@ -129,6 +130,8 @@ int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 	 * allow SOCK_MEMALLOC sockets to use it as this socket is
 	 * helping free memory
 	 */
+	// 如果skb是从pfmemalloc保留中分配的，则只允许SOCK_MEMALLOC套接字使用它，
+	// 因为此套接字有助于释放内存
 	if (skb_pfmemalloc(skb) && !sock_flag(sk, SOCK_MEMALLOC)) {
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_PFMEMALLOCDROP);
 		return -ENOMEM;
@@ -140,7 +143,7 @@ int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 	err = security_sock_rcv_skb(sk, skb);
 	if (err)
 		return err;
-
+	// rcu读锁加速
 	rcu_read_lock();
 	filter = rcu_dereference(sk->sk_filter);
 	if (filter) {
@@ -148,10 +151,15 @@ int sk_filter_trim_cap(struct sock *sk, struct sk_buff *skb, unsigned int cap)
 		unsigned int pkt_len;
 
 		skb->sk = sk;
+		// 执行过滤器，该函数的实现类似于汇编程序的解释器，进行数据的比较等动作。
+		// 返回值为0表示待过滤的数据不符合过滤规则则需丢弃；非0表明数据包中前
+		// pkt_len个字节可以继续往下处理，传递给用户进程
 		pkt_len = bpf_prog_run_save_cb(filter->prog, skb);
 		skb->sk = save_sk;
+		// 通过过滤函数的返回值pkt_len来确认是丢弃还是放行
 		err = pkt_len ? pskb_trim(skb, max(cap, pkt_len)) : -EPERM;
 	}
+	// rcu读锁解锁
 	rcu_read_unlock();
 
 	return err;
@@ -1194,17 +1202,25 @@ static void sk_filter_release_rcu(struct rcu_head *rcu)
  *
  *	Remove a filter from a socket and release its resources.
  */
+// 从一个socket移除filter然后释放资源
 static void sk_filter_release(struct sk_filter *fp)
 {
+	// 递减待删除的引用计数，并检测递减后的引用计数值是否为0，
+	// 如果不为0， 则说明还有其他的传输控制块在使用不能释放，
+	// 否则将其挂载到系统的rcu_bh_data中，在适当时候通过回调sk_filter_release_rcu
 	if (refcount_dec_and_test(&fp->refcnt))
 		call_rcu(&fp->rcu, sk_filter_release_rcu);
 }
 
+// 卸载过滤器
 void sk_filter_uncharge(struct sock *sk, struct sk_filter *fp)
 {
+	// 减少辅助缓冲区空间的大小
 	u32 filter_size = bpf_prog_size(fp->prog->len);
-
+	// 减少传输控制块的sk_omem_alloc
 	atomic_sub(filter_size, &sk->sk_omem_alloc);
+	// 释放套接口过滤器占用的资源,sk_filter_release并不是直接释放，
+	// 而是将释放的过滤器挂载到系统的rcu_bh_data中，在适当的时候通过回调将其释放。
 	sk_filter_release(fp);
 }
 
@@ -1449,26 +1465,30 @@ void bpf_prog_destroy(struct bpf_prog *fp)
 }
 EXPORT_SYMBOL_GPL(bpf_prog_destroy);
 
+// 安装过滤器
 static int __sk_attach_prog(struct bpf_prog *prog, struct sock *sk)
 {
 	struct sk_filter *fp, *old_fp;
-
+	// 为传输控制器分配用于保存待安装的过滤器的缓存
 	fp = kmalloc(sizeof(*fp), GFP_KERNEL);
 	if (!fp)
 		return -ENOMEM;
 
 	fp->prog = prog;
 
+	// 检测socket辅助缓存区的空间是否足够
 	if (!__sk_filter_charge(sk, fp)) {
 		kfree(fp);
 		return -ENOMEM;
 	}
+	// 设置过滤器的引用计数
 	refcount_set(&fp->refcnt, 1);
-
+	// 得到原来的过滤器
 	old_fp = rcu_dereference_protected(sk->sk_filter,
 					   lockdep_sock_is_held(sk));
+	// 设置新的过滤器
 	rcu_assign_pointer(sk->sk_filter, fp);
-
+	// 如果有老的过滤器，得把占用得空间还给sock的辅助缓冲区空间
 	if (old_fp)
 		sk_filter_uncharge(sk, old_fp);
 
@@ -1522,11 +1542,13 @@ struct bpf_prog *__get_filter(struct sock_fprog *fprog, struct sock *sk)
  * occurs or there is insufficient memory for the filter a negative
  * errno code is returned. On success the return is zero.
  */
+// 安装一个用户的过滤器代码。
 int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk)
 {
 	struct bpf_prog *prog = __get_filter(fprog, sk);
 	int err;
 
+	// 检查prog是否有效
 	if (IS_ERR(prog))
 		return PTR_ERR(prog);
 
@@ -1567,11 +1589,15 @@ static struct bpf_prog *__get_bpf(u32 ufd, struct sock *sk)
 	return bpf_prog_get_type(ufd, BPF_PROG_TYPE_SOCKET_FILTER);
 }
 
+// 安装过滤器的大体过程如下：首先为传输控制块分配缓存，用于保存待安装的过滤器，
+// 然后把过滤器从用户空间复制到新分配的缓存中，接着检测过滤器代码的有效性，最后才将其安装到传输控制块的sk_filter上。
 int sk_attach_bpf(u32 ufd, struct sock *sk)
 {
+	// 得到拷贝好的过滤器结构
 	struct bpf_prog *prog = __get_bpf(ufd, sk);
 	int err;
 
+	// 检测bpf_prog结构是否有效
 	if (IS_ERR(prog))
 		return PTR_ERR(prog);
 
@@ -10595,18 +10621,23 @@ const struct bpf_prog_ops flow_dissector_prog_ops = {
 	.test_run		= bpf_prog_test_run_flow_dissector,
 };
 
+// 卸载过滤器
 int sk_detach_filter(struct sock *sk)
 {
 	int ret = -ENOENT;
 	struct sk_filter *filter;
 
+	// 检查过滤器是否锁定
 	if (sock_flag(sk, SOCK_FILTER_LOCKED))
 		return -EPERM;
 
+	// 得到当前的过滤器 
 	filter = rcu_dereference_protected(sk->sk_filter,
 					   lockdep_sock_is_held(sk));
 	if (filter) {
+		// 将过滤器设置为NULL
 		RCU_INIT_POINTER(sk->sk_filter, NULL);
+		// 减少传输控制块占用的辅助内存空间,然后调用sk_filter_release释放套接口过滤器占用的资源。
 		sk_filter_uncharge(sk, filter);
 		ret = 0;
 	}

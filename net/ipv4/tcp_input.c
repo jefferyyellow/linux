@@ -6016,6 +6016,19 @@ reset:
  *	the rest is checked inline. Fast processing is turned on in
  *	tcp_data_queue when everything is OK.
  */
+// ESTABLISHED状态的TCP接收函数
+// 为了能高效地处理接收到的段，对TCP端出来提供了两条路径：快速路径和慢速路径。
+// 下面情况下只能使用慢速路径：
+// 1.我们宣布了一个零窗口，零窗口探测只能在慢速路径中处理。
+// 2.乱序的数据段到达
+// 3.预计会有紧急数据
+// 4.没有剩余的缓冲空间
+// 5.收到意外的TCP标志/窗口值/头部长度（通过检查TCP头部的pred_flags）
+// 6.数据双向发送。快速路径仅支持单纯的发送或者单纯的接收（这意味着序号值或者ack值必须保持不变）
+// 7.意外的Tcp选项
+// 
+// 当这些条件不满足时，它会进入一个按照RFC793模式处理的标准接收过程来处理所有情况。
+// 前三种情况由适当的pred_flags设置保证，其余情况在线检查。当一切正常时，tcp_data_queue就会打开快速处理.
 void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 {
 	enum skb_drop_reason reason = SKB_DROP_REASON_NOT_SPECIFIED;
@@ -6024,9 +6037,11 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	unsigned int len = skb->len;
 
 	/* TCP congestion window tracking */
+	// 跟踪TCP拥塞窗口
 	trace_tcp_probe(sk, skb);
 
 	tcp_mstamp_refresh(tp);
+	// 更新入口路由缓存
 	if (unlikely(!rcu_access_pointer(sk->sk_rx_dst)))
 		inet_csk(sk)->icsk_af_ops->sk_rx_dst_set(sk, skb);
 	/*
@@ -6054,8 +6069,13 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	 *	 space for instance)
 	 *	PSH flag is ignored.
 	 */
-
+	// 首先获取TCP首部中第4个32位字，然后和TCP_HP_BITS作与操作，屏蔽保留的位和PSH，
+	// 最后和预测标志比较，如果通过则还需进行首部预测的其他比较，否则直接执行慢速路径。
+	// 在众多的标志中，32位的确认序号字段和ACK标志是TCP首部的一部分，因此发送ACK无需任何代价，
+	// 一旦一个连接建立起来，ACK标志总是被设置为1。而PSH标志位是用来通知对方尽快接收的，
+	// 因此在预测标志中忽略它。当预测标志为0时，则表示关闭了首部预测，必须慢速路径执行。
 	if ((tcp_flag_word(th) & TCP_HP_BITS) == tp->pred_flags &&
+		// TCP_SKB_CB(skb)->seq表示本次接收到的TCP段的序号，tp->rcv_nxt是等待接收的下一个段的序号
 	    TCP_SKB_CB(skb)->seq == tp->rcv_nxt &&
 	    !after(TCP_SKB_CB(skb)->ack_seq, tp->snd_nxt)) {
 		int tcp_header_len = tp->tcp_header_len;
@@ -6066,12 +6086,18 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 		 */
 
 		/* Check timestamp */
+		// 通过TCP首部长度来检测TCP首部中是否存在时间戳选项
 		if (tcp_header_len == sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) {
 			/* No? Slow path! */
+			// 仅通过长度来判断是不安全的，因此还需对选项的类型及长度进行检测，以保证是一个正常的时间戳选项。
+			// 如果检测不过，那就只能执行慢速路径
 			if (!tcp_parse_aligned_timestamp(tp, th))
 				goto slow_path;
 
 			/* If PAWS failed, check it more carefully in slow path */
+			// 从时间戳选项中获取时间戳，然后将获取到的时间戳值与下一个发送的TCP段的时间戳回显值相比，
+			// 作PAWS检测，如果前者比后者小，则说明接收到TCP段的序号虽然是预期的，
+			// 但时间戳值过早，已发生了序号问卷，需执行慢速路径处理。
 			if ((s32)(tp->rx_opt.rcv_tsval - tp->rx_opt.ts_recent) < 0)
 				goto slow_path;
 
@@ -6082,6 +6108,7 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 			 */
 		}
 
+		// 无负荷的ack段
 		if (len <= tcp_header_len) {
 			/* Bulk data transfer: sender */
 			if (len == tcp_header_len) {
@@ -6089,6 +6116,8 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 				 * seq == rcv_nxt and rcv_wup <= rcv_nxt.
 				 * Hence, check seq<=rcv_wup reduces to:
 				 */
+				// 如果TCP首部中存在时间戳选项，并且接收的段都已确认，则保持时间戳的值，
+				// 用于发送下一个段的时间戳回显。
 				if (tcp_header_len ==
 				    (sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) &&
 				    tp->rcv_nxt == tp->rcv_wup)
@@ -6097,8 +6126,15 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 				/* We know that such packets are checksummed
 				 * on entry.
 				 */
+				// 对ACK进行适当处理，如更新发送窗口、释放已确认的段等，处理完成后释放该ACK段。
 				tcp_ack(sk, skb, 0);
 				__kfree_skb(skb);
+				
+				// 注意：这个回来的段是不带数据的，但是发送ack最好和数据一起发送，减少网络负载，
+				// 所以检查传输控制块是否有数据发送
+
+				// 检测是否有数据、有必要发送，如果有则给对方发送数据。
+				// 同时检测是否有必要增加发送缓存区大小
 				tcp_data_snd_check(sk);
 				/* When receiving pure ack in fast path, update
 				 * last ts ecr directly instead of calling
@@ -6107,6 +6143,8 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 				tp->rcv_rtt_last_tsecr = tp->rx_opt.rcv_tsecr;
 				return;
 			} else { /* Header too small */
+				// 如果接收到的段TCP首部长度比预期的小，则说明该TCP段有异常，
+				// 更新SNMP统计量后直接丢弃
 				reason = SKB_DROP_REASON_PKT_TOO_SMALL;
 				TCP_INC_STATS(sock_net(sk), TCP_MIB_INERRS);
 				goto discard;
@@ -6115,9 +6153,11 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 			int eaten = 0;
 			bool fragstolen = false;
 
+			// 进行数据报的完整性校验
 			if (tcp_checksum_complete(skb))
 				goto csum_error;
 
+			// 如果整个SKB缓冲区的总长度超出预分配的长度，则只需慢速路径
 			if ((int)skb->truesize > sk->sk_forward_alloc)
 				goto step5;
 
@@ -6125,36 +6165,49 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 			 * seq == rcv_nxt and rcv_wup <= rcv_nxt.
 			 * Hence, check seq<=rcv_wup reduces to:
 			 */
+			// 有时间戳选项，且数据段均已确认完毕，则更新时间戳
 			if (tcp_header_len ==
 			    (sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) &&
 			    tp->rcv_nxt == tp->rcv_wup)
 				tcp_store_ts_recent(tp);
 
+			// 计算RTT
 			tcp_rcv_rtt_measure_ts(sk, skb);
 
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPHPHITS);
 
 			/* Bulk data transfer: receiver */
 			skb_dst_drop(skb);
+			// 删除SKB中的TCP首部，然后将数据包添加到接收队列中缓存起来，等待进程主动读取。
+			// 设置该SKB的宿主，释放回调函数，更新传输控制块的已使用接收缓存总量及预分配缓存长度，
+			// 此时该套接口已属于当前传输控制块了。
 			__skb_pull(skb, tcp_header_len);
 			eaten = tcp_queue_rcv(sk, skb, &fragstolen);
-
+			// 延时控制块的更新
 			tcp_event_data_recv(sk, skb);
 
+			// 如果接收段的ACK序号不等于最早未确认段的序号，则调用tcp_ack处理ACK，
+			// 然后输出发送队列中的段
 			if (TCP_SKB_CB(skb)->ack_seq != tp->snd_una) {
 				/* Well, only one small jumplet in fast path... */
+				// 处理acp
 				tcp_ack(sk, skb, FLAG_DATA);
+				// 检查是否有数据要发送，需要则发送
 				tcp_data_snd_check(sk);
+				// 没有ack要发送
 				if (!inet_csk_ack_scheduled(sk))
 					goto no_ack;
 			} else {
+				// 更新snd_wl1为TCP_SKB_CB(skb)->seq
 				tcp_update_wl(tp, TCP_SKB_CB(skb)->seq);
 			}
-
+			// 检查是否有ack要发送，需要则发送
 			__tcp_ack_snd_check(sk, 0);
 no_ack:
+			// SKB已经复制到用户空间，则释放之
 			if (eaten)
 				kfree_skb_partial(skb, fragstolen);
+			// 唤醒当前套接口的进程等待队列fasync_list上的进程，通知它们读取数据
 			tcp_data_ready(sk);
 			return;
 		}

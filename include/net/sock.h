@@ -416,6 +416,7 @@ struct sock {
 #define sk_rxhash		__sk_common.skc_rxhash
 
 	/* early demux fields */
+	// 缓存入口路由
 	struct dst_entry __rcu	*sk_rx_dst;
 	int			sk_rx_dst_ifindex;
 	u32			sk_rx_dst_cookie;

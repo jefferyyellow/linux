@@ -1244,24 +1244,30 @@ set_sndbuf:
 		ret = sock_set_timeout(&sk->sk_sndtimeo, optval,
 				       optlen, optname == SO_SNDTIMEO_OLD);
 		break;
-
+	// 安装过滤器
 	case SO_ATTACH_FILTER: {
 		struct sock_fprog fprog;
-
+		// 从用户空间拷贝sock_fprog结构到内核空间
 		ret = copy_bpf_fprog_from_user(&fprog, optval, optlen);
 		if (!ret)
+			// 安装过滤器
 			ret = sk_attach_filter(&fprog, sk);
 		break;
 	}
+	// 安装BPF过滤器，安装过滤器总的来说，主要是从用户空间复制过滤规则到内核空间，
+	// 然后安装到对应的传输控制块上
 	case SO_ATTACH_BPF:
 		ret = -EINVAL;
+		// 检验参数的有效性
 		if (optlen == sizeof(u32)) {
 			u32 ufd;
 
 			ret = -EFAULT;
+			// 然后从用户空间复制bpf_frog结构到内核空间，最后调用sk_attack_bpf安装
+			// 注意：bpf_frog只是sk_filter结构的一部分
 			if (copy_from_sockptr(&ufd, optval, sizeof(ufd)))
 				break;
-
+			// sk_attach_bpf为套接口安装过滤器，参数fprog为待安装的过滤器，sk为安装的目标传输控制块。
 			ret = sk_attach_bpf(ufd, sk);
 		}
 		break;
@@ -1291,6 +1297,7 @@ set_sndbuf:
 		ret = reuseport_detach_prog(sk);
 		break;
 
+	// 卸载过滤器
 	case SO_DETACH_FILTER:
 		ret = sk_detach_filter(sk);
 		break;

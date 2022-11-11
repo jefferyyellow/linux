@@ -686,27 +686,33 @@ static inline u32 __tcp_set_rto(const struct tcp_sock *tp)
 {
 	return usecs_to_jiffies((tp->srtt_us >> 3) + tp->rttvar_us);
 }
-
+// 设置快速路径的预测标志
+// 由于预测标志需直接与TCP首部重的字段值做比较，因此也以网络字节序存储
 static inline void __tcp_fast_path_on(struct tcp_sock *tp, u32 snd_wnd)
 {
 	/* mptcp hooks are only on the slow path */
 	if (sk_is_mptcp((struct sock *)tp))
 		return;
-
+	// 高5位(27-31)表示tcp首部的长度字数，中间一部分是标志位，最低16位是窗口大小
 	tp->pred_flags = htonl((tp->tcp_header_len << 26) |
 			       ntohl(TCP_FLAG_ACK) |
 			       snd_wnd);
 }
-
+// 设置快速路径的预测标志
 static inline void tcp_fast_path_on(struct tcp_sock *tp)
 {
 	__tcp_fast_path_on(tp, tp->snd_wnd >> tp->rx_opt.snd_wscale);
 }
-
+// 设置预测标志，当前必须满足设置预测标志的条件
 static inline void tcp_fast_path_check(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-
+	// 设置预测标志的条件是：
+	// 1.缓存乱序队列为空，说明网络比较畅通
+	// 2.接收窗口不为0，说明当前还能接收数据
+	// 3.当前已使用的接收缓存未达上限，也说明目前还能接收数据。
+	// 4.没有收到紧急数据，快速路径不处理带外数据
+	// 满足以上条件就可以调用tcp_fast_path_on来设置预测标志了
 	if (RB_EMPTY_ROOT(&tp->out_of_order_queue) &&
 	    tp->rcv_wnd &&
 	    atomic_read(&sk->sk_rmem_alloc) < sk->sk_rcvbuf &&

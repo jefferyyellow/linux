@@ -1720,11 +1720,13 @@ INDIRECT_CALLABLE_DECLARE(struct dst_entry *ipv4_dst_check(struct dst_entry *,
 // 传输控制块接收处理的段都由tcp_v4_do_rcv处理，在该函数中再根据不同的状态由不同的函数处理：
 // TCP_ESTABLISHED状态的处理函数为tcp_rcv_established，TCP_LISTEN状态下出现syn_cookies的情况下的处理函数为tcp_child_process
 // 其他状态的处理函数为tcp_rcv_state_process
+// TCP传输层接收到段之后，经过了简单的校验，并确定接收处理该段的传输控制块之后，
+// 除非处于FIN_WAIT_2或TIME_WAIT状态，否则都会调用tcp_v4_do_rcv作具体处理。
 int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 {
 	enum skb_drop_reason reason;
 	struct sock *rsk;
-
+	// 如果传输控制块的状态是TCP_ESTABLISHED,则调用tcp_rcv_established接收处理
 	if (sk->sk_state == TCP_ESTABLISHED) { /* Fast path */
 		struct dst_entry *dst;
 
@@ -1733,6 +1735,10 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 
 		sock_rps_save_rxhash(sk, skb);
 		sk_mark_napi_id(sk, skb);
+		// 判断入口路由缓存释放合法，由于作为服务端，会接收到来自于多个接口的客户端请求，
+		// 所以除需判断缓存路由是否过期外(dst->ops->check(dst,0))，
+		// 还需判断其接口索引(rx_dst_ifindex)是否与此时报文的入接口相同(skb_iif)。
+		// 两个有一个不满足就释放缓存的路由项。其后会在tcp_rcv_established函数中更新。
 		if (dst) {
 			if (sk->sk_rx_dst_ifindex != skb->skb_iif ||
 			    !INDIRECT_CALL_1(dst->ops->check, ipv4_dst_check,
@@ -1746,6 +1752,8 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	reason = SKB_DROP_REASON_NOT_SPECIFIED;
+	// 对报文进行完整性校验，如果失败则跳转到csum_err处统计后丢弃
+	// 校验报文的长度和校验和
 	if (tcp_checksum_complete(skb))
 		goto csum_err;
 
@@ -1763,7 +1771,9 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 		}
 	} else
 		sock_rps_save_rxhash(sk, skb);
-
+	// tcp_rcv_state_process接收处于TCP_LISTEN,TCP_SYN_RECV,TCP_SYN_SENT,
+	// TCP_FIN_WAIT1,TCP_FIN_WAIT2,TCP_LAST_ACK,TCP_CLOSING状态的传输控制块。
+	// 如果接收过程中出错，则跳转到reset处,给对端发送RST段后丢弃
 	if (tcp_rcv_state_process(sk, skb)) {
 		rsk = sk;
 		goto reset;
@@ -1771,8 +1781,10 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 	return 0;
 
 reset:
+	// 给对端发送RST段
 	tcp_v4_send_reset(rsk, skb);
 discard:
+	// 丢弃异常报文后返回
 	kfree_skb_reason(skb, reason);
 	/* Be careful here. If this function gets more complicated and
 	 * gcc suffers from register pressure on the x86, sk (in %ebx)
@@ -1782,6 +1794,7 @@ discard:
 	return 0;
 
 csum_err:
+	// 进行统计，然后丢弃异常报文
 	reason = SKB_DROP_REASON_TCP_CSUM;
 	trace_tcp_bad_csum(skb);
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_CSUMERRORS);
@@ -1966,6 +1979,9 @@ static void tcp_v4_restore_cb(struct sk_buff *skb)
 		sizeof(struct inet_skb_parm));
 }
 
+// 根据TCP首部中的信息来设置TCP控制块中的值，
+// 因为TCP首部中的值都是网络字节序的，为了便于后续处理直接访问TCP首部字段，
+// 在此将这些值转换为本机字节序后存储在TCP私有控制块中。
 static void tcp_v4_fill_cb(struct sk_buff *skb, const struct iphdr *iph,
 			   const struct tcphdr *th)
 {
@@ -1991,7 +2007,11 @@ static void tcp_v4_fill_cb(struct sk_buff *skb, const struct iphdr *iph,
 /*
  *	From tcp_input.c
  */
-
+// tcp_v4_rcv是TCP接收数据的总入口。首先对TCP段进行简单的校验，如TCP首部长度、
+// 校验和等，此时还不清楚该TCP段的宿主，即还不清楚向哪个TCP传输控制块传递该段。
+// 然后根据源地址、源端口、目的地址和目的端口查找到所属的传输控制块。最后调用
+// tcp_v4_do_rcv将该TCP段接收到所属的传输控制块的接收队列中。参数SKB就是从IP层
+// 传递过来的数据报
 int tcp_v4_rcv(struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb->dev);
@@ -2005,21 +2025,24 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	int ret;
 
 	drop_reason = SKB_DROP_REASON_NOT_SPECIFIED;
+	// 如果段不是发送到本地的，直接丢弃
 	if (skb->pkt_type != PACKET_HOST)
 		goto discard_it;
 
 	/* Count it even if it's bad */
 	__TCP_INC_STATS(net, TCP_MIB_INSEGS);
-
+	// 如果TCP段在传输过程中被分片了，则到达本地后会在IP层重新组装。组装完成后，报文分片都存储在分片链表中。
+	// 在此需把存储在分片中的报文复制到SKB的线性存储区，如果发生异常就丢弃该报文。
 	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
 		goto discard_it;
 
 	th = (const struct tcphdr *)skb->data;
-
+	// 如果TCP首部中首部长度字段的值小于不带首部的的TCP首部长度，则说明TCP数据异常
 	if (unlikely(th->doff < sizeof(struct tcphdr) / 4)) {
 		drop_reason = SKB_DROP_REASON_PKT_TOO_SMALL;
 		goto bad_packet;
 	}
+	// 检测整个TCP段长度和TCP首部长度是否异常，如有异常则丢弃
 	if (!pskb_may_pull(skb, th->doff * 4))
 		goto discard_it;
 
@@ -2027,20 +2050,27 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	 * Packet length and doff are validated by header prediction,
 	 * provided case of th->doff==0 is eliminated.
 	 * So, we defer the checks. */
-
+	// 验证TCP首部中的校验和，如果校验和有误，则说明报文已损坏
 	if (skb_checksum_init(skb, IPPROTO_TCP, inet_compute_pseudo))
 		goto csum_error;
 
+	// 得到TCP头部
 	th = (const struct tcphdr *)skb->data;
+	// 
 	iph = ip_hdr(skb);
 lookup:
 	// 找到skb对应的socket
+	// 调用__inet_lookup_skb在散列表中根据地址和端口查找传输控制块。
+	// 如果在ehash散列表中找到，则表示三次握手后已经建立了连接，可以正常的通信。
+	// 如果在bhash散列表中找到，则表示已经绑定了端口，处于侦听状态。如果都没有找到，
+	// 则说明此时对应的传输控制块还没有创建，跳转到tcp_check_req处处理。
 	sk = __inet_lookup_skb(&tcp_hashinfo, skb, __tcp_hdrlen(th), th->source,
 			       th->dest, sdif, &refcounted);
 	if (!sk)
 		goto tcp_check_req;
 
 process:
+	// 如果此时传输控制块处于TCP_TIME_WAIT状态，则跳转到do_time_wait处理
 	if (sk->sk_state == TCP_TIME_WAIT)
 		goto do_time_wait;
 	// 如果服务端发送SYN+ACK后的状态
@@ -2131,7 +2161,7 @@ process:
 			goto discard_and_relse;
 		}
 	}
-
+	// 调用xfrm4_policy_check查找IPSec策略数据库，如果查找失败则跳转到discard_and_release处处理
 	if (!xfrm4_policy_check(sk, XFRM_POLICY_IN, skb)) {
 		drop_reason = SKB_DROP_REASON_XFRM_POLICY;
 		goto discard_and_relse;
@@ -2142,8 +2172,9 @@ process:
 	if (drop_reason)
 		goto discard_and_relse;
 
+	// 初始化SKB中与netfilter有关的成员
 	nf_reset_ct(skb);
-
+	// 如果传输控制块中安装了控制器，则只有符合过滤规则的报文才能放行，不符合的都丢弃
 	if (tcp_filter(sk, skb)) {
 		drop_reason = SKB_DROP_REASON_SOCKET_FILTER;
 		goto discard_and_relse;
@@ -2151,9 +2182,11 @@ process:
 	th = (const struct tcphdr *)skb->data;
 	iph = ip_hdr(skb);
 	tcp_v4_fill_cb(skb, iph, th);
-
+	// 设置SKB的dev为NULL，接受到的包已到达传输层，此时dev已不再有意义
 	skb->dev = NULL;
 
+	// 如果是侦听套接字，直接调用tcp_v4_do_rcv,其实连接上的套接字如果没有加锁状态，
+	// 也是调用该函数进行处理
 	if (sk->sk_state == TCP_LISTEN) {
 		ret = tcp_v4_do_rcv(sk, skb);
 		goto put_and_return;
@@ -2167,7 +2200,7 @@ process:
 	ret = 0;
 	// 使用sock_owned_by_user来检测该控制块是否已经被进程锁定
 	// 如果传输控制块未被用户进程上锁，则将TCP段输入到接收队列中，
-	// 否则接收到后备队列中。
+	// 否则接收到后备队列中,用户进程解锁传输控制块后再处理。
 	if (!sock_owned_by_user(sk)) {
 		ret = tcp_v4_do_rcv(sk, skb);
 	} else {
@@ -2183,12 +2216,14 @@ put_and_return:
 	return ret;
 
 no_tcp_socket:
+	// 设置丢弃原因
 	drop_reason = SKB_DROP_REASON_NO_SOCKET;
+	// 调用xfrm4_policy_check查找IPSec策略数据库，如果查找失败则跳转到discard_it处直接丢弃
 	if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb))
 		goto discard_it;
-
+	// 根据TCP首部中的信息来设置TCP控制块中的值
 	tcp_v4_fill_cb(skb, iph, th);
-
+	// 检测该报文的长度和校验和，如果异常则说明报文已损坏，统计后丢弃
 	if (tcp_checksum_complete(skb)) {
 csum_error:
 		drop_reason = SKB_DROP_REASON_TCP_CSUM;
@@ -2197,12 +2232,14 @@ csum_error:
 bad_packet:
 		__TCP_INC_STATS(net, TCP_MIB_INERRS);
 	} else {
+		// 给对赌发送RST段后丢弃:w
 		tcp_v4_send_reset(NULL, skb);
 	}
 
 discard_it:
 	SKB_DR_OR(drop_reason, NOT_SPECIFIED);
 	/* Discard frame. */
+	// 释放skb
 	kfree_skb_reason(skb, drop_reason);
 	return 0;
 
@@ -2211,7 +2248,7 @@ discard_and_relse:
 	if (refcounted)
 		sock_put(sk);
 	goto discard_it;
-
+	// 处理传输控制块处于TIME_WAIT状态的情况
 do_time_wait:
 	if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
 		drop_reason = SKB_DROP_REASON_XFRM_POLICY;

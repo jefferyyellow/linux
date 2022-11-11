@@ -2928,6 +2928,8 @@ bool tcp_schedule_loss_probe(struct sock *sk, bool advancing_rto)
  * a packet is still in a qdisc or driver queue.
  * In this case, there is very little point doing a retransmit !
  */
+// 幸亏skb的快速克隆，我们能检测是否先前传送的一个包是否仍然在qdisc或者驱动队列。
+// 在这种情况下，重传就没啥意义
 static bool skb_still_in_host_queue(struct sock *sk,
 				    const struct sk_buff *skb)
 {
@@ -3300,12 +3302,16 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 
 
 	/* Inconclusive MTU probe */
+	// 如果路径MTU发现还没有结束，无论是何种原因导致的重传，都将其标志位结束
 	if (icsk->icsk_mtup.probe_size)
 		icsk->icsk_mtup.probe_size = 0;
 
+	// 是否还在传送qdisc或者驱动器队列
 	if (skb_still_in_host_queue(sk, skb))
 		return -EBUSY;
 
+	// 检测重传的段，接收方是否已经收到其部分或者全局。如果收到全部，则说明TCP的实现代码有BUG。
+	// 如果收到部分，则需要调整TCP段的负载，即删除SKB存储区前部的接收方已接收到的数据
 	if (before(TCP_SKB_CB(skb)->seq, tp->snd_una)) {
 		if (unlikely(before(TCP_SKB_CB(skb)->end_seq, tp->snd_una))) {
 			WARN_ON_ONCE(1);
@@ -3314,10 +3320,13 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 		if (tcp_trim_head(sk, skb, tp->snd_una - TCP_SKB_CB(skb)->seq))
 			return -ENOMEM;
 	}
-
+	
+	// 根据目的地址等条件获取路由。如果获取路由失败，则不能发送。这里的"rebuild_header"
+	// 似乎有些奇怪，从字面上理解会以为是重构首部，实际上是查询路由。
 	if (inet_csk(sk)->icsk_af_ops->rebuild_header(sk))
 		return -EHOSTUNREACH; /* Routing failure or similar. */
 
+	// 得到当前的mss
 	cur_mss = tcp_current_mss(sk);
 
 	/* If receiver has shrunk his window, and skb is out of
@@ -3325,11 +3334,17 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 	 * case, when window is shrunk to zero. In this case
 	 * our retransmit serves as a zero window probe.
 	 */
+	// 如果接收方已经缩小了接收窗口，且待重传的SKB已经不在新窗口内，则不能再重传该SKB，
+	// 但有一种情况例外，那就是当接收窗口缩小到零，在这种情况下，会发送零窗口探测段。
 	if (!before(TCP_SKB_CB(skb)->seq, tcp_wnd_end(tp)) &&
 	    TCP_SKB_CB(skb)->seq != tp->snd_una)
 		return -EAGAIN;
 
+	// 计算可以传递的最大长度
 	len = cur_mss * segs;
+	// 如果SKB中的数据长度大于mss，则需要对该SKB分段。这种情况一般出现在启动了路径MTU,
+	// 接收到需要分片ICMP目的不可达报文时，如果ICMP中下一跳的PMTU小于当前PMTU，
+	// 则更新当前PMTU以及当前的MSS
 	if (skb->len > len) {
 		if (tcp_fragment(sk, TCP_FRAG_IN_RTX_QUEUE, skb, len,
 				 cur_mss, GFP_ATOMIC))
@@ -3352,17 +3367,22 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 		tcp_ecn_clear_syn(sk, skb);
 
 	/* Update global and local TCP statistics. */
+	// 更新全局和本地的TCP统计
 	segs = tcp_skb_pcount(skb);
 	TCP_ADD_STATS(sock_net(sk), TCP_MIB_RETRANSSEGS, segs);
 	if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_SYN)
 		__NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPSYNRETRANS);
+	// 增加总重传次数
 	tp->total_retrans += segs;
+	// 增加总重传的字节数
 	tp->bytes_retrans += skb->len;
 
 	/* make sure skb->data is aligned on arches that require it
 	 * and check if ack-trimming & collapsing extended the headroom
 	 * beyond what csum_start can cover.
 	 */
+	// 确保skb-data在结构上对齐并且检查ack-trimming和collapsing是否将headroom
+	// 扩展超出csum_start可以覆盖的范围
 	if (unlikely((NET_IP_ALIGN && ((unsigned long)skb->data & 3)) ||
 		     skb_headroom(skb) >= 0xFFFF)) {
 		struct sk_buff *nskb;
@@ -3382,12 +3402,15 @@ int __tcp_retransmit_skb(struct sock *sk, struct sk_buff *skb, int segs)
 			tcp_rate_skb_sent(sk, skb);
 		}
 	} else {
+		// 将tcp段发送出去
 		err = tcp_transmit_skb(sk, skb, 1, GFP_ATOMIC);
 	}
 
 	/* To avoid taking spuriously low RTT samples based on a timestamp
 	 * for a transmit that never happened, always mark EVER_RETRANS
 	 */
+	// 为了避免基于时间戳为从未发送的传输获取虚假的低RTT样本，请始终标志位EVER_RETRANS
+	// 重传标志
 	TCP_SKB_CB(skb)->sacked |= TCPCB_EVER_RETRANS;
 
 	if (BPF_SOCK_OPS_TEST_FLAG(tp, BPF_SOCK_OPS_RETRANS_CB_FLAG))

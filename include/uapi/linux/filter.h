@@ -20,16 +20,26 @@
  *	Try and keep these values and structures similar to BSD, especially
  *	the BPF code definitions which need to match so you can share filters
  */
- 
+// 实际上，可以把sock_filter结构数组看作一系列的指令集，和汇编指令很相似，
+// 原理也差不多。内核在过滤过程中，会根据一条条指令对被过滤的包做出相应的动作。
+// sock_filter结构为BPF过滤代码，结构定义如下： 
 struct sock_filter {	/* Filter block */
+	// 指令编码：动作包括“比较”、“偏移”、“返回”
 	__u16	code;   /* Actual filter code */
+	// 成功执行比较操作后跳转到指令数组jt处，做下一步过滤操作
 	__u8	jt;	/* Jump true */
+	// 执行比较操作失败后跳转到指令数组jf处，做下一步过滤操作
 	__u8	jf;	/* Jump false */
+	// 当动作code为“偏移”时，k是当前读取数据包的偏移值，单位字节或字或双字。
+	// 当动作code为“比较”时，k是与指针指向的数据包当前位置比较的值。
 	__u32	k;      /* Generic multiuse field */
 };
 
+// BPF过滤器结构
 struct sock_fprog {	/* Required for SO_ATTACH_FILTER. */
+	// 为filter指向的sock_filter结构数组的长度
 	unsigned short		len;	/* Number of filter blocks */
+	// 指向sock_filter结构为BPF过滤代码
 	struct sock_filter __user *filter;
 };
 
