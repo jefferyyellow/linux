@@ -5883,6 +5883,7 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	// 说明接收到的TCP段已确认过。
 	if (tcp_fast_parse_options(sock_net(sk), skb, th, tp) &&
 	    tp->rx_opt.saw_tstamp &&
+		// paws校验
 	    tcp_paws_discard(sk, skb)) {
 		if (!th->rst) {
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_PAWSESTABREJECTED);
@@ -5898,6 +5899,8 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 
 	/* Step 1: check sequence number */
 	// 如果TCP序号无效，则丢弃该段，在这之前如果TCP段无RST标志，需发送DACK给对端。
+	// 调用tcp_sequence检测接收到的段序号是否在接收窗口内，如果不是，则丢弃该数据包。
+	// 如果不是复位段（TCP首部中有RST标志）则还需发送DACK给对端，说明接收到的TCP段不住接收窗口内。
 	if (!tcp_sequence(tp, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq)) {
 		/* RFC793, page 37: "In all states except SYN-SENT, all reset
 		 * (RST) segments are validated by checking their SEQ-fields."
@@ -5905,12 +5908,14 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 		 * an acknowledgment should be sent in reply (unless the RST
 		 * bit is set, if so drop the segment and return)".
 		 */
+		// 如果不是复位段
 		if (!th->rst) {
 			if (th->syn)
 				goto syn_challenge;
 			if (!tcp_oow_rate_limited(sock_net(sk), skb,
 						  LINUX_MIB_TCPACKSKIPPEDSEQ,
 						  &tp->last_oow_ack_time))
+				// 发送dack给对端，说明收到的TCP段不在接收窗口内
 				tcp_send_dupack(sk, skb);
 		} else if (tcp_reset_check(sk, skb)) {
 			goto reset;
@@ -5920,7 +5925,7 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	}
 
 	/* Step 2: check RST bit */
-	// 如果TCP段中存在RST标志，则给对端发送RST段复位，然后丢弃该段。
+	// 如果TCP段是复位段（存在RST标志），处理完复位后丢弃该段。
 	if (th->rst) {
 		/* RFC 5961 3.2 (extend to match against (RCV.NXT - 1) after a
 		 * FIN and SACK too if available):
@@ -5931,22 +5936,26 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 		 * else
 		 *     Send a challenge ACK
 		 */
+		// 序列号正好能匹配，正是我们希望接收的序列号，或者通过reset检测
+		// 就跳转到reset标签
 		if (TCP_SKB_CB(skb)->seq == tp->rcv_nxt ||
 		    tcp_reset_check(sk, skb))
 			goto reset;
 
+		// 如果是一个sack段，并且ack块的数目大于0
 		if (tcp_is_sack(tp) && tp->rx_opt.num_sacks > 0) {
 			struct tcp_sack_block *sp = &tp->selective_acks[0];
 			int max_sack = sp[0].end_seq;
 			int this_sack;
 
+			// 遍历得到最大的sack序列号
 			for (this_sack = 1; this_sack < tp->rx_opt.num_sacks;
 			     ++this_sack) {
 				max_sack = after(sp[this_sack].end_seq,
 						 max_sack) ?
 					sp[this_sack].end_seq : max_sack;
 			}
-
+			// 如果SKB的起始序列号是最大的sack序列号
 			if (TCP_SKB_CB(skb)->seq == max_sack)
 				goto reset;
 		}
@@ -5955,6 +5964,7 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 		 * and no data has been received
 		 * for current active TFO socket
 		 */
+		// 如果RST是乱序并且当前激活的TFO套接字没有数据接收，则禁用 TFO
 		if (tp->syn_fastopen && !tp->data_segs_in &&
 		    sk->sk_state == TCP_ESTABLISHED)
 			tcp_fastopen_active_disable(sk);
@@ -5968,12 +5978,13 @@ static bool tcp_validate_incoming(struct sock *sk, struct sk_buff *skb,
 	/* step 4: Check for a SYN
 	 * RFC 5961 4.2 : Send a challenge ack
 	 */
-	// 如果TCP首部中存在SYN标志，则向对端发送RST段，重新复位。
+	// 如果TCP首部中存在SYN标志，已经建立的TCP收到SYN段则说明对端发送了错误的消息，发送一个challenge的ack
 	if (th->syn) {
 syn_challenge:
 		if (syn_inerr)
 			TCP_INC_STATS(sock_net(sk), TCP_MIB_INERRS);
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPSYNCHALLENGE);
+		// tcp_send_challenge_ack 函数里就会调用 tcp_send_ack 函数来回复一个携带了正确序列号和确认号的 ACK 报文。
 		tcp_send_challenge_ack(sk);
 		SKB_DR_SET(reason, TCP_INVALID_SYN);
 		goto discard;
@@ -5988,7 +5999,9 @@ discard:
 	return false;
 
 reset:
+	// 复位socket
 	tcp_reset(sk, skb);
+	// 丢弃数据报
 	__kfree_skb(skb);
 	return false;
 }
@@ -6213,10 +6226,13 @@ no_ack:
 		}
 	}
 
+// 慢速路径
 slow_path:
+	// 监测长度和校验和
 	if (len < (th->doff << 2) || tcp_checksum_complete(skb))
 		goto csum_error;
 
+	// 包头的标记不合法
 	if (!th->ack && !th->rst && !th->syn) {
 		reason = SKB_DROP_REASON_TCP_FLAGS;
 		goto discard;
@@ -6225,25 +6241,33 @@ slow_path:
 	/*
 	 *	Standard slow path.
 	 */
+	// 进行标准的慢速路径处理
 
+	// 验证传入的数据段
 	if (!tcp_validate_incoming(sk, skb, th, 1))
 		return;
 
 step5:
+	// 处理传入的ack
 	reason = tcp_ack(sk, skb, FLAG_SLOWPATH | FLAG_UPDATE_TS_RECENT);
 	if ((int)reason < 0) {
 		reason = -reason;
 		goto discard;
 	}
+	// 采样、更新接收方的RTT
 	tcp_rcv_rtt_measure_ts(sk, skb);
 
 	/* Process urgent data. */
+	// 处理紧急数据，调用tcp_urg，如果TCP首部中设置了URG标志，就会处理带外数据
 	tcp_urg(sk, skb, th);
 
 	/* step 7: process the segment text */
+	// 处理数据报的数据，TCP段中的负荷部分由tcp_data_queue处理，包括对接收缓冲区是否有足够
+	// 空间的检查，以及将SKB插入到接收队列或者乱序队列中等等
 	tcp_data_queue(sk, skb);
-
+	// 检查是否有数据需要发送
 	tcp_data_snd_check(sk);
+	// 检查是否有ACK需要发送
 	tcp_ack_snd_check(sk);
 	return;
 
