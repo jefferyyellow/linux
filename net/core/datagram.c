@@ -416,12 +416,18 @@ static int __skb_datagram_iter(const struct sk_buff *skb, int offset,
 	struct sk_buff *frag_iter;
 
 	/* Copy header. */
+	// 先复制数据区部分的数据
+
+	// 检查数据区中除了TCP首部之外，还有没有其他的用户数据
 	if (copy > 0) {
+		// 如果有，则调用simple_copy_to_iter复制数据
 		if (copy > len)
 			copy = len;
 		n = INDIRECT_CALL_1(cb, simple_copy_to_iter,
 				    skb->data + offset, copy, data, to);
+		// 根据已经复制的数据，调整偏移
 		offset += n;
+		// 判断是否还有数据等待复制
 		if (n != copy)
 			goto short_copy;
 		if ((len -= copy) == 0)
@@ -429,14 +435,19 @@ static int __skb_datagram_iter(const struct sk_buff *skb, int offset,
 	}
 
 	/* Copy paged appendix. Hmm... why does this look so complicated? */
+	// 拷贝分页的附录，嗯嗯，怎么看起来如此复杂？
+	// 复制SG类型的聚合分散I/O数据区中的数据
+
+	// 循环处理支持聚合分散I/O的数据块缓冲区
 	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
 		int end;
 		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
 
 		WARN_ON(start > offset + len);
-
+		// 判断当前缓冲区是否存在可复制的数据
 		end = start + skb_frag_size(frag);
 		if ((copy = end - offset) > 0) {
+			// 获取当前缓冲区页面的虚拟地址，然后调用simple_copy_to_iter
 			struct page *page = skb_frag_page(frag);
 			u8 *vaddr = kmap(page);
 
@@ -446,7 +457,9 @@ static int __skb_datagram_iter(const struct sk_buff *skb, int offset,
 					vaddr + skb_frag_off(frag) + offset - start,
 					copy, data, to);
 			kunmap(page);
+			// 调整数据的偏移
 			offset += n;
+			// 判断是否还有数据等待复制
 			if (n != copy)
 				goto short_copy;
 			if (!(len -= copy))
@@ -455,12 +468,16 @@ static int __skb_datagram_iter(const struct sk_buff *skb, int offset,
 		start = end;
 	}
 
+	// 复制frag_list类型的聚合分散I/O数据区的数据
+	// 遍历fragsfrag_list，由于挂接在frag_list链表上的都市完整的SKB，
+	// 因此递归调用__skb_datagram_iter来复制数据
 	skb_walk_frags(skb, frag_iter) {
 		int end;
 
 		WARN_ON(start > offset + len);
 
 		end = start + frag_iter->len;
+		// 判断当前的frag_iter是否有数据需要拷贝
 		if ((copy = end - offset) > 0) {
 			if (copy > len)
 				copy = len;
@@ -469,10 +486,12 @@ static int __skb_datagram_iter(const struct sk_buff *skb, int offset,
 				goto fault;
 			if ((len -= copy) == 0)
 				return 0;
+			// 调整偏移
 			offset += copy;
 		}
 		start = end;
 	}
+	// 检查已经复制的数据长度与待复制的长度是否相等，如果不相等则说明出错了
 	if (!len)
 		return 0;
 
@@ -480,7 +499,8 @@ static int __skb_datagram_iter(const struct sk_buff *skb, int offset,
 	 * gave us a bogus length on the skb.  We should probably
 	 * print a warning here as it may indicate a kernel bug.
 	 */
-
+	// 这不是一个真正的用户拷贝错误，但是有人在SKB上给了我们一个虚假的长度。
+	// 我们可能应该在这里打印一个警告，因为它可能表示内核错误
 fault:
 	iov_iter_revert(to, offset - start_off);
 	return -EFAULT;
@@ -743,21 +763,27 @@ static int skb_copy_and_csum_datagram(const struct sk_buff *skb, int offset,
  *		 -EINVAL - checksum failure.
  *		 -EFAULT - fault during copy.
  */
+// 进行校验和检查得复制
+// hlen：TCP首部长度
 int skb_copy_and_csum_datagram_msg(struct sk_buff *skb,
 				   int hlen, struct msghdr *msg)
 {
 	__wsum csum;
+	// 从SKB中获取复制数据得长度
 	int chunk = skb->len - hlen;
 
 	if (!chunk)
 		return 0;
-
+	// 当前描述块所指的缓存区小于当前整个SKB的数据，即不能完整复制当前整个SKB的数据，
+	// 有一部分需复制到其他缓冲区的情况下复制数据
 	if (msg_data_left(msg) < chunk) {
 		if (__skb_checksum_complete(skb))
 			return -EINVAL;
 		if (skb_copy_datagram_msg(skb, hlen, msg, chunk))
 			goto fault;
 	} else {
+		// 当前描述块所指的缓存区能完整地复制当前整个SKB数据的情况下，
+		// 调用skb_copy_and_csum_datagram复制数据
 		csum = csum_partial(skb->data, hlen, skb->csum);
 		if (skb_copy_and_csum_datagram(skb, hlen, &msg->msg_iter,
 					       chunk, &csum))
