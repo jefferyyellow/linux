@@ -1517,39 +1517,51 @@ EXPORT_SYMBOL(tcp_sendmsg);
  *	Handle reading urgent data. BSD has very simple semantics for
  *	this, no blocking and very strange errors 8)
  */
-
+// 处理读取带外数据。BSD对此有非常简单的语义，没有阻塞和非常奇怪的错误8（这个8是不是打错了？）
+// sk：待读取带外数据所在的传输控制块
+// msg：用来组织读取数据的消息头
+// len：用户空间提供缓存的长度
+// flags：读取带外数据的标志
 static int tcp_recv_urg(struct sock *sk, struct msghdr *msg, int len, int flags)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	/* No URG data to read. */
+	// 检测是否有带外数据可读。如果设置了SOCK_URGINLINE标志，说明带外放入正常数据流，
+	// 即在普通数据流中接收带外数据，因此不能使用读带外数据的方法读取数据。如果带外数据标志为0，
+	// 即没有带外数据，或者为TCP_URG_READ，即带外数据已全部读取，则也不能使用读带外数据的方法
+	// 读取数据，返回无效错误码。
 	if (sock_flag(sk, SOCK_URGINLINE) || !tp->urg_data ||
 	    tp->urg_data == TCP_URG_READ)
 		return -EINVAL;	/* Yes this is right ! */
-
+	// 如果TCP还没有连接，也不能读取带外数据，则返回未连接错误码。
 	if (sk->sk_state == TCP_CLOSE && !sock_flag(sk, SOCK_DONE))
 		return -ENOTCONN;
-
+	// 通过检测带外数据标识来判断带外数据是否有效。
 	if (tp->urg_data & TCP_URG_VALID) {
+		// 从带外数据标志urg_data中获取带外数据，此时已将带外数据存储到urg_data中。
 		int err = 0;
 		char c = tp->urg_data;
-
+		// 如果不是查看数据，则更新带外数据标识urg_data为TCP_URG_READ，表示带外数据已读。
 		if (!(flags & MSG_PEEK))
 			WRITE_ONCE(tp->urg_data, TCP_URG_READ);
 
 		/* Read urgent data. */
+		// 由于读取了带外数据，因此在返回的flags中增加MSG_OOB标志。
 		msg->msg_flags |= MSG_OOB;
-
+		// 如果提供读取带外数据的用户空间长度大于0，则将带外数据复制到用户空间，
+		// 同时设置读取的带外数据长度为1，反而，如果提供读取带外数据的用户空间长度
+		// 为0，则说明需要截短数据，因此在返回的flag中添加MSG_TRUNC
 		if (len > 0) {
 			if (!(flags & MSG_TRUNC))
 				err = memcpy_to_msg(msg, &c, 1);
 			len = 1;
 		} else
 			msg->msg_flags |= MSG_TRUNC;
-
+		// 根据读取带外数据的情况返回已读数据长度或者错误码
 		return err ? -EFAULT : len;
 	}
-
+	// 如果TCP连接已断开，或者调用shutdown后不允许接收数据，则返回0，表示没有读到带外数据。
 	if (sk->sk_state == TCP_CLOSE || (sk->sk_shutdown & RCV_SHUTDOWN))
 		return 0;
 
@@ -1559,6 +1571,8 @@ static int tcp_recv_urg(struct sock *sk, struct msghdr *msg, int len, int flags)
 	 * blocking state of the socket.
 	 * Mike <pall@rz.uni-karlsruhe.de>
 	 */
+	// 如果在其他状态下没有读取到带外数据，则返回EAGAIN错误码，表示当前没有
+	// 接收到带外数据，如需读带外数据可再次调用。
 	return -EAGAIN;
 }
 
@@ -1593,6 +1607,8 @@ static int tcp_peek_sndq(struct sock *sk, struct msghdr *msg, int len)
  * calculation of whether or not we must ACK for the sake of
  * a window update.
  */
+// 用户接收完完整帧就会清空缓冲区，如果需要就会发送ack，copied就是tcp_recvmsg到目前为止
+// 拷贝到用户的字节数目，它加快了计算是否必须ACK才能更新窗口的速度。
 void tcp_cleanup_rbuf(struct sock *sk, int copied)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -1604,6 +1620,10 @@ void tcp_cleanup_rbuf(struct sock *sk, int copied)
 	     "cleanup rbuf bug: copied %X seq %X rcvnxt %X\n",
 	     tp->copied_seq, TCP_SKB_CB(skb)->end_seq, tp->rcv_nxt);
 
+	// 在需要向对方发送Ack时，若满足以下条件之一，则需立即发送ACK给对方：
+	// 1.接收窗口中有一个以上的全尺寸还没有给对方确认。
+	// 2.复制到用户进程空间的数据量大于0，且发送确认紧急度为ICSK_ACK_PUSHED2，或者
+	// 发送确认紧急度为ICSK_ACK_PUSHED且非pingpong模式，并且sk_rmem_alloc不为0
 	if (inet_csk_ack_scheduled(sk)) {
 		const struct inet_connection_sock *icsk = inet_csk(sk);
 
@@ -1629,6 +1649,8 @@ void tcp_cleanup_rbuf(struct sock *sk, int copied)
 	 * Even if window raised up to infinity, do not send window open ACK
 	 * in states, where we will not receive more. It is useless.
 	 */
+	// 如果以上条件不满足，则还需作进一步判断，如果当前的接收窗口即小于接收窗口上限的一半，
+	// 又小于接收缓冲区大小的一半，则必需立即发送ACK给对方。
 	if (copied > 0 && !time_to_ack && !(sk->sk_shutdown & RCV_SHUTDOWN)) {
 		__u32 rcv_window_now = tcp_receive_window(tp);
 
@@ -1645,6 +1667,7 @@ void tcp_cleanup_rbuf(struct sock *sk, int copied)
 				time_to_ack = true;
 		}
 	}
+	// 根据time_to_ack标志确定是否立即发送ACK
 	if (time_to_ack)
 		tcp_send_ack(sk);
 }

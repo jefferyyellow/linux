@@ -3541,6 +3541,7 @@ void tcp_xmit_retransmit_queue(struct sock *sk)
  * In general, we want to allow one skb per socket to avoid hangs
  * with edge trigger epoll()
  */
+// 预分配缓存额度的函数
 void sk_forced_mem_schedule(struct sock *sk, int size)
 {
 	int amt;

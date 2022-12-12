@@ -275,23 +275,30 @@ static void tcp_measure_rcv_mss(struct sock *sk, const struct sk_buff *skb)
 	}
 }
 
+
 static void tcp_incr_quickack(struct sock *sk, unsigned int max_quickacks)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
+	// 根据接收窗口和对端MSS计算得到允许发送快速确认段数目
 	unsigned int quickacks = tcp_sk(sk)->rcv_wnd / (2 * icsk->icsk_ack.rcv_mss);
-
+	// 如果为0，强制置为2
 	if (quickacks == 0)
 		quickacks = 2;
+	// 如果超过最大值，就取最大值
 	quickacks = min(quickacks, max_quickacks);
+	// 如果计算得到的快速ACK的数量大于现在的数量，应用上
 	if (quickacks > icsk->icsk_ack.quick)
 		icsk->icsk_ack.quick = quickacks;
 }
-
+// 尽管已经进入快速确认模式，但在该确认模式下发送ACK的数量也是有限的，
+// 每次发送ACK后都会递减可发送快速确认数(参见tcp_event_ack_send())，
+// 一旦该值减至0，就会自动进入延时确认模式。
 void tcp_enter_quickack_mode(struct sock *sk, unsigned int max_quickacks)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
-
+	// 增加发送快速确认数
 	tcp_incr_quickack(sk, max_quickacks);
+	// 设置快速确认标志
 	inet_csk_exit_pingpong_mode(sk);
 	icsk->icsk_ack.ato = TCP_ATO_MIN;
 }
@@ -300,7 +307,8 @@ EXPORT_SYMBOL(tcp_enter_quickack_mode);
 /* Send ACKs quickly, if "quick" count is not exhausted
  * and the session is not interactive.
  */
-
+// 用于检测是否处于快速确认模式，检测条件为
+// 可发送快速确认数不为0，同时pingpong为0
 static bool tcp_in_quickack_mode(struct sock *sk)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);
@@ -620,11 +628,14 @@ EXPORT_SYMBOL(tcp_initialize_rcv_mss);
  * though this reference is out of date.  A new paper
  * is pending.
  */
+// 无论是没有时间戳选项的RTT采样还是有时间戳选项的RTT采样，最后更新RTT时都会调用tcp_rcv_rtt_update
+// sample：得到的RTT采样
+// win_dep：标识是否需要对RTT采样进行微调，1：不进行微调，0：需要进行微调。
 static void tcp_rcv_rtt_update(struct tcp_sock *tp, u32 sample, int win_dep)
 {
 	u32 new_sample = tp->rcv_rtt_est.rtt_us;
 	long m = sample;
-
+	// 以前采样过
 	if (new_sample != 0) {
 		/* If we sample in larger samples in the non-timestamp
 		 * case, we could grossly overestimate the RTT especially
@@ -636,51 +647,70 @@ static void tcp_rcv_rtt_update(struct tcp_sock *tp, u32 sample, int win_dep)
 		 * else with timestamps disabled convergence takes too
 		 * long.
 		 */
+		// 进行微调，rtt为已测量得到的RTT，sample为本次采样得到的RTT，
+		// 计算公式为rtt = rtt + (sample - rtt)/8
+		// 注意，代码中的new_sample为放大了8倍的，可以看非微调部分
 		if (!win_dep) {
 			m -= (new_sample >> 3);
 			new_sample += m;
 		} else {
+			// 不对RTT进行微调，如果RTT采样小于原先保存的RTT（都是8倍后的比较），就更新
 			m <<= 3;
 			if (m < new_sample)
 				new_sample = m;
 		}
 	} else {
 		/* No previous measure. */
+		// 不敢通过何种方法，如果是第一次进行RTT采样，则直接将采样得到的RTT乘以8后保存，
+		// 以方便后续更新RTT。
 		new_sample = m << 3;
 	}
-
+	// 更新最新计算得到的RTT
 	tp->rcv_rtt_est.rtt_us = new_sample;
 }
 
+// rtt采样
 static inline void tcp_rcv_rtt_measure(struct tcp_sock *tp)
 {
 	u32 delta_us;
-
+	// 如果第一次接收到 数据或第一次采用本方法，则不能采样RTT，跳转到new_measure,
+	// 记录时间和设置下次进行RTT采样的点。
 	if (tp->rcv_rtt_est.time == 0)
 		goto new_measure;
+	// 检测是否已经到达进行RTT采样的点，即至上次采样后接收完一个接收窗口数量的数据。
+	// 如果没到就直接退出，否则调用tcp_rcv_rtt_update采样，
 	if (before(tp->rcv_nxt, tp->rcv_rtt_est.seq))
 		return;
+	// 得到tp->tcp_mstamp - tp->rcv_rtt_est.time
 	delta_us = tcp_stamp_us_delta(tp->tcp_mstamp, tp->rcv_rtt_est.time);
+	// 如果为0，强制置为1
 	if (!delta_us)
 		delta_us = 1;
+	// 最后的参数1表示不对RTT的采样进行微调
 	tcp_rcv_rtt_update(tp, delta_us, 1);
 
 new_measure:
+	// 记录收到一个窗口后的seq
 	tp->rcv_rtt_est.seq = tp->rcv_nxt + tp->rcv_wnd;
+	// 记录当前的时间
 	tp->rcv_rtt_est.time = tp->tcp_mstamp;
 }
 
+// 实现在支持时间戳选项的情况下采样RTT，该函数在接收到带有负载的TCP段时被调用，
+// 但会比tcp_rcv_rtt_measure()先被调用，因此在接收到带有时间戳选项的段时会优先进行RTT采样。
 static inline void tcp_rcv_rtt_measure_ts(struct sock *sk,
 					  const struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-
+	// 如果已经处理了，直接返回
 	if (tp->rx_opt.rcv_tsecr == tp->rcv_rtt_last_tsecr)
 		return;
+	// 缓存最后的回显时间
 	tp->rcv_rtt_last_tsecr = tp->rx_opt.rcv_tsecr;
-
+	// 检测是不是稳定流量下收到的（通过将接收到的段的负荷与接收方MMS相比得到）
 	if (TCP_SKB_CB(skb)->end_seq -
 	    TCP_SKB_CB(skb)->seq >= inet_csk(sk)->icsk_ack.rcv_mss) {
+		// 得到时间差
 		u32 delta = tcp_time_stamp(tp) - tp->rx_opt.rcv_tsecr;
 		u32 delta_us;
 
@@ -688,6 +718,7 @@ static inline void tcp_rcv_rtt_measure_ts(struct sock *sk,
 			if (!delta)
 				delta = 1;
 			delta_us = delta * (USEC_PER_SEC / TCP_TS_HZ);
+			// 调用tcp_rcv_rtt_update采样，参数0表示需要对RTT采样作微调。
 			tcp_rcv_rtt_update(tp, delta_us, 0);
 		}
 	}
@@ -697,6 +728,10 @@ static inline void tcp_rcv_rtt_measure_ts(struct sock *sk,
  * This function should be called every time data is copied to user space.
  * It calculates the appropriate TCP receive buffer space.
  */
+// 该函数应该在每次将数据拷贝到用户空间调用，它计算合适的TCP接收缓存空间。
+// 在把数据从接收缓存复制到用户空间之后，接收缓存占用的空间会被释放，因此
+// 需要调整TCP接收缓存的大小。tcp_rcv_space_adjust就是用来完成这个功能的，
+// 并且该函数也只在数据从TCP接收缓存复制到用户空间之后才会被调用。
 void tcp_rcv_space_adjust(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -707,11 +742,15 @@ void tcp_rcv_space_adjust(struct sock *sk)
 
 	tcp_mstamp_refresh(tp);
 	time = tcp_stamp_us_delta(tp->tcp_mstamp, tp->rcvq_space.time);
+	// 如果尚未计算出接收方rtt，或者现在的时间距离上次调整接收缓存的时间小于rtt
 	if (time < (tp->rcv_rtt_est.rtt_us >> 3) || tp->rcv_rtt_est.rtt_us == 0)
 		return;
 
 	/* Number of bytes copied to user in last RTT */
+	// 得到最后一个RTT期间拷贝了多少个字节到用户空间
 	copied = tp->copied_seq - tp->rcvq_space.seq;
+	// 如果拷贝的数目小于接收缓存的大小，直接跳转到new_measure
+	// 则无需调整接收缓存和接收窗口的大小。
 	if (copied <= tp->rcvq_space.space)
 		goto new_measure;
 
@@ -723,7 +762,12 @@ void tcp_rcv_space_adjust(struct sock *sk)
 	 * now is for the next RTT, not the current one :
 	 * <prev RTT . ><current RTT .. ><next RTT .... >
 	 */
+	// 有一点理论：复制=在上一个RTT中接收的字节，为了应对数据包丢失，
+	// 我们的基本窗口需要2倍因子。为了应对慢启动，每个RTT发送方100%增长它的窗口
+	// 我们需要4倍因子，因为我们发送的ACK是针对下一个RTT，而不是当前的RTT
 
+	// 如果启用了tcp_moderate_rcvbuf,并且接收缓存没有上锁，
+	// 则可以调整接收缓存和接收窗口的大小。
 	if (sock_net(sk)->ipv4.sysctl_tcp_moderate_rcvbuf &&
 	    !(sk->sk_userlocks & SOCK_RCVBUF_LOCK)) {
 		int rcvmem, rcvbuf;
@@ -732,11 +776,14 @@ void tcp_rcv_space_adjust(struct sock *sk)
 		/* minimal window to cope with packet losses, assuming
 		 * steady state. Add some cushion because of small variations.
 		 */
+		// 假设处于稳定状态，处理数据包丢失的最小窗口，由于变化较小，请添加一些缓冲
 		rcvwin = ((u64)copied << 1) + 16 * tp->advmss;
 
 		/* Accommodate for sender rate increase (eg. slow start) */
+		// 适应发送速率增加（例如，缓慢启动）
 		grow = rcvwin * (copied - tp->rcvq_space.space);
 		do_div(grow, tp->rcvq_space.space);
+		// 计算的窗口再加上增长
 		rcvwin += (grow << 1);
 
 		rcvmem = SKB_TRUESIZE(tp->advmss + MAX_TCP_HEADER);
@@ -4205,6 +4252,8 @@ static u16 tcp_parse_mss_option(const struct tcphdr *th, u16 user_mss)
  * But, this can also be called on packets in the established flow when
  * the fast version below fails.
  */
+// 查找Tcp选项。通常只有在SYN和SYN ACK数据包上调用，但是，在已经建立连接的流上如果
+// 快速版本失败后也会调用下面的函数
 void tcp_parse_options(const struct net *net,
 		       const struct sk_buff *skb,
 		       struct tcp_options_received *opt_rx, int estab,
@@ -4217,17 +4266,21 @@ void tcp_parse_options(const struct net *net,
 	ptr = (const unsigned char *)(th + 1);
 	opt_rx->saw_tstamp = 0;
 	opt_rx->saw_unknown = 0;
-
+	// 如果TCP首部中包含选项，即该首部长度大于不包含TCP选项的普通TCP首部。
 	while (length > 0) {
 		int opcode = *ptr++;
 		int opsize;
-
+		// 取选项的第二个字节，即kind，根据其值分别处理。
 		switch (opcode) {
+		// TCPOPT_EOL表示选项表结束，因此直接返回
 		case TCPOPT_EOL:
 			return;
+		// 前面已提到过TCPOPT_NOP为空操作，只作填充用，因此选项长度减1，
+		// 进入下一个循环处理下一个选项。
 		case TCPOPT_NOP:	/* Ref: RFC 793 section 3.1 */
 			length--;
 			continue;
+		// 如果不是选项表结束标志也不是空操作，则取选项长度，并检测其合法性。
 		default:
 			if (length < 2)
 				return;
@@ -4236,7 +4289,13 @@ void tcp_parse_options(const struct net *net,
 				return;
 			if (opsize > length)
 				return;	/* don't parse partial options */
+
+			
 			switch (opcode) {
+			// TCPOPT_MSS用来通告最大段长度，TCPOLEN_MSS宏定义为4，又因为MSS选项只能出现在
+			// SYN段中，因此判断TCP头部中SYN是否置位，此时调用参数estab应该为0，取最大段长度MSS，
+			// user_mss是用户以TCP_MAXSEG选项调用setsockopt()设置的，将最大段长度上限值mss_clamp
+			// 设置为选项中的MSS和user_mss两者中的较小值。
 			case TCPOPT_MSS:
 				if (opsize == TCPOLEN_MSS && th->syn && !estab) {
 					u16 in_mss = get_unaligned_be16(ptr);
@@ -4248,6 +4307,11 @@ void tcp_parse_options(const struct net *net,
 					}
 				}
 				break;
+			// TCPOPT_WINDOW是窗口扩大因子选项，和最大长度选项一样，也只能出现在SYN段中，
+			// 因此做同样的判断。TCPOLEN_WINDOW定义为3。取窗口扩大因子选项中的位移数，将
+			// 表示SYN段中包含窗口扩大因子选项的wscale_ok置为1，如果选项中的位移数大于14则警告，
+			// 和网络相关的printk都必须由net_ratelimit来监控。发送窗口扩大因子snd_wscale赋值为
+			// 位移数和14两者中的较小值。
 			case TCPOPT_WINDOW:
 				if (opsize == TCPOLEN_WINDOW && th->syn &&
 				    !estab && net->ipv4.sysctl_tcp_window_scaling) {
@@ -4263,6 +4327,7 @@ void tcp_parse_options(const struct net *net,
 					opt_rx->snd_wscale = snd_wscale;
 				}
 				break;
+			// 时间戳选项
 			case TCPOPT_TIMESTAMP:
 				if ((opsize == TCPOLEN_TIMESTAMP) &&
 				    ((estab && opt_rx->tstamp_ok) ||
@@ -4272,6 +4337,9 @@ void tcp_parse_options(const struct net *net,
 					opt_rx->rcv_tsecr = get_unaligned_be32(ptr + 4);
 				}
 				break;
+			// TCPOPT_SACK_PERM为允许SACK选项，只能出现在SYN段中。将sack_ok置为1，表示
+			// SYN段中允许SACK选项。tcp_sack_reset将tcp_options)received结构中的三个与
+			// SACK有关的字段dsack、eff_sacks和num_sacks清零。
 			case TCPOPT_SACK_PERM:
 				if (opsize == TCPOLEN_SACK_PERM && th->syn &&
 				    !estab && net->ipv4.sysctl_tcp_sack) {
@@ -4279,7 +4347,10 @@ void tcp_parse_options(const struct net *net,
 					tcp_sack_reset(opt_rx);
 				}
 				break;
-
+			// TCPOLEN_SACK_BASE为2，TCPOLEN_SACK_PERBLOCK为8，因此if语句的意思是
+			// 选项长度包含kind、length字段以及一个至多个左右边界值对，且扣除kind和length
+			// 字段长度后能被左右边界值对大小整除，sack_ok为1表示允许SACK。将tcp_skb_cb的
+			// sacked字段指向这些左右边界值对的开始处。
 			case TCPOPT_SACK:
 				if ((opsize >= (TCPOLEN_SACK_BASE + TCPOLEN_SACK_PERBLOCK)) &&
 				   !((opsize - TCPOLEN_SACK_BASE) % TCPOLEN_SACK_PERBLOCK) &&
@@ -4323,22 +4394,26 @@ void tcp_parse_options(const struct net *net,
 			default:
 				opt_rx->saw_unknown = 1;
 			}
+			// 更新ptr和lenth进入下一个循环
 			ptr += opsize-2;
 			length -= opsize;
 		}
 	}
 }
 EXPORT_SYMBOL(tcp_parse_options);
-
+// 分析对齐的时间戳选项
 static bool tcp_parse_aligned_timestamp(struct tcp_sock *tp, const struct tcphdr *th)
 {
 	const __be32 *ptr = (const __be32 *)(th + 1);
-
+	// 判断时间戳选项的第一个32位字是否符合格式
 	if (*ptr == htonl((TCPOPT_NOP << 24) | (TCPOPT_NOP << 16)
 			  | (TCPOPT_TIMESTAMP << 8) | TCPOLEN_TIMESTAMP)) {
+		// saw_tstamp置为1表示存在时间戳
 		tp->rx_opt.saw_tstamp = 1;
+		// 取下一个32位字，即为时间戳，然后赋值给rcv_tsval
 		++ptr;
 		tp->rx_opt.rcv_tsval = ntohl(*ptr);
+		// 接着再取第二个32位字，时间戳回显应答，存放在rcv_tsecr
 		++ptr;
 		if (*ptr)
 			tp->rx_opt.rcv_tsecr = ntohl(*ptr) - tp->tsoffset;
@@ -4352,6 +4427,7 @@ static bool tcp_parse_aligned_timestamp(struct tcp_sock *tp, const struct tcphdr
 /* Fast parse options. This hopes to only see timestamps.
  * If it is wrong it falls back on tcp_parse_options().
  */
+// 快速解析选项。这个只希望看到时间戳，如果出错就会调用tcp_parse_options
 static bool tcp_fast_parse_options(const struct net *net,
 				   const struct sk_buff *skb,
 				   const struct tcphdr *th, struct tcp_sock *tp)
@@ -4359,15 +4435,22 @@ static bool tcp_fast_parse_options(const struct net *net,
 	/* In the spirit of fast parsing, compare doff directly to constant
 	 * values.  Because equality is used, short doff can be ignored here.
 	 */
+	// TCP首部数据结构的doff字段4位长，存储TCP首部中包含的32位字数。
+	// 如果这个字段等于tcphdr数据结构大小的1/4即表示这是一个不包含tcp选项的普通TCP首部。
+	// 在这种情况下，将saw_tstamp置为0，表示不存在时间戳，然后返回0。
 	if (th->doff == (sizeof(*th) / 4)) {
 		tp->rx_opt.saw_tstamp = 0;
 		return false;
+	// tcp_options_received结构的tstamp_ok字段占一位，其值为1则表示在SYN段中存在
+	// 时间戳选项，TCPOLEN_TSTAMP_ALIGNED宏是时间戳选项按32字节对齐后的长度，除以4后用来
+	// 验证doff字段是不是无TCP选项的TCP首部长度加上时间戳选项长度。
 	} else if (tp->rx_opt.tstamp_ok &&
 		   th->doff == ((sizeof(*th) + TCPOLEN_TSTAMP_ALIGNED) / 4)) {
+		// 分析对齐的时间戳选项
 		if (tcp_parse_aligned_timestamp(tp, th))
 			return true;
 	}
-
+	// 如果首部包含多种TCP选项，则用tcp_parse_options作全面解析。
 	tcp_parse_options(net, skb, &tp->rx_opt, 1, NULL);
 	if (tp->rx_opt.saw_tstamp && tp->rx_opt.rcv_tsecr)
 		tp->rx_opt.rcv_tsecr -= tp->tsoffset;
@@ -4895,6 +4978,9 @@ static void tcp_drop_reason(struct sock *sk, struct sk_buff *skb,
 /* This one checks to see if we can put data from the
  * out_of_order queue into the receive_queue.
  */
+// 这是一个检查是否可以将out_of_order队列中的数据放入receive_queue。
+// tcp_ofo_queue用于处理乱序队列中预期接收的段,检测乱序队列,如果存在过早的段,
+// 则设置下次确认的SACK选项.如果存在预期接收的段,则将其转移到接收队列中.
 static void tcp_ofo_queue(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -4902,13 +4988,16 @@ static void tcp_ofo_queue(struct sock *sk)
 	bool fin, fragstolen, eaten;
 	struct sk_buff *skb, *tail;
 	struct rb_node *p;
-
+	// 循环处理缓存乱序队列中的SKB.
 	p = rb_first(&tp->out_of_order_queue);
 	while (p) {
 		skb = rb_to_skb(p);
+		// 由于乱序队列中的段都是按序号顺序存储,因此一旦某个SKB中的段的序号大于
+		// 预期接收端的序号,即可结束处理.
 		if (after(TCP_SKB_CB(skb)->seq, tp->rcv_nxt))
 			break;
-
+		// 如果某个SKB中的段的序号小于预期接收段的序号,则说明这些段中至少
+		// 有一部分已经接收到了.因此需要处理SACK选项,在下个确认中发送.
 		if (before(TCP_SKB_CB(skb)->seq, dsack_high)) {
 			__u32 dsack = dsack_high;
 			if (before(TCP_SKB_CB(skb)->end_seq, dsack_high))
@@ -4917,21 +5006,27 @@ static void tcp_ofo_queue(struct sock *sk)
 		}
 		p = rb_next(p);
 		rb_erase(&skb->rbnode, &tp->out_of_order_queue);
-
+		// 如果某个SKB中的段已经全部接收,则说明已经确认了,因此可以删除并释放它,然后处理下一个SKB.
 		if (unlikely(!after(TCP_SKB_CB(skb)->end_seq, tp->rcv_nxt))) {
 			tcp_drop_reason(sk, skb, SKB_DROP_REASON_TCP_OFO_DROP);
 			continue;
 		}
-
+		// 得到接受队列的尾节点
 		tail = skb_peek_tail(&sk->sk_receive_queue);
+		// 首先会调用tcp_try_coalesce进行分段合并到队列中最后一个skb的尝试，
+		// 若失败则调用__skb_queue_tail添加该skb到队列尾部
 		eaten = tail && tcp_try_coalesce(sk, tail, skb, &fragstolen);
+		// 更新下个预期接收段的序号
 		tcp_rcv_nxt_update(tp, TCP_SKB_CB(skb)->end_seq);
 		fin = TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN;
+		// 合并失败，将节点的skb添加到sk_receive_queue队列的末尾。
 		if (!eaten)
 			__skb_queue_tail(&sk->sk_receive_queue, skb);
 		else
+			// 调用kfree_skb_partial释放skb,fragstolen表示合并了数据包的线性缓存部分的数据，
+			// 但是共享缓存中的数据继续在使用，所以不能够释放。
 			kfree_skb_partial(skb, fragstolen);
-
+		// 如果接收到的段中存在FIN标志,则调用tcp_fin处理
 		if (unlikely(fin)) {
 			tcp_fin(sk);
 			/* tcp_fin() purges tp->out_of_order_queue,
@@ -4945,6 +5040,9 @@ static void tcp_ofo_queue(struct sock *sk)
 static bool tcp_prune_ofo_queue(struct sock *sk);
 static int tcp_prune_queue(struct sock *sk);
 
+// TCP的核心预分配缓存额度函数为tcp_try_rmem_schedule，
+// 如果无法分配缓存额度，将首先调用tcp_prune_queue函数尝试合并sk_receive_queue中的数据包skb以减少空间占用，
+// 如果空间仍然不足，最后调用tcp_prune_ofo_queue函数清理乱序数据包队列（out_of_order_queue）。
 static int tcp_try_rmem_schedule(struct sock *sk, struct sk_buff *skb,
 				 unsigned int size)
 {
@@ -4962,6 +5060,7 @@ static int tcp_try_rmem_schedule(struct sock *sk, struct sk_buff *skb,
 	return 0;
 }
 
+// 接收乱序的段
 static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -4969,9 +5068,13 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 	struct sk_buff *skb1;
 	u32 seq, end_seq;
 	bool fragstolen;
-
+	// 如果接收到乱序的段，则所有可能在传输过程中经历了拥塞，因此需要检测ECN标志，
+	// 在经过路由器时，如果有路由器拥塞会设置该标志，说明路径上存在拥塞，
+	// 需要发送方和接收方进行拥塞控制处理。如果没有经历拥塞，则需要尽快通知发送方，
+	// 让发送方尽可能地重传丢失的段。
 	tcp_ecn_check_ce(sk, skb);
 
+	// 如果接收缓存空间不够，则丢弃
 	if (unlikely(tcp_try_rmem_schedule(sk, skb, skb->truesize))) {
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPOFODROP);
 		sk->sk_data_ready(sk);
@@ -4980,23 +5083,31 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 	}
 
 	/* Disable header prediction. */
+	// 由于接收到乱序的段，因此需要把预测标志清零，
+	// 乱序队列不为空的情况下是不能执行快速路径的。
 	tp->pred_flags = 0;
+	// 设置发送确认紧急程度，标识有确认发送。
 	inet_csk_schedule_ack(sk);
-
+	// 增加乱序包的数量
 	tp->rcv_ooopack += max_t(u16, 1, skb_shinfo(skb)->gso_segs);
 	NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPOFOQUEUE);
+	// 得到数据段的起始和结束序列号
 	seq = TCP_SKB_CB(skb)->seq;
 	end_seq = TCP_SKB_CB(skb)->end_seq;
 
 	p = &tp->out_of_order_queue.rb_node;
+	// 如果乱序队列为空
 	if (RB_EMPTY_ROOT(&tp->out_of_order_queue)) {
 		/* Initial out of order segment, build 1 SACK. */
+		// 如果tcp支持sack，初始化一个乱序段，构建一个SACK
 		if (tcp_is_sack(tp)) {
 			tp->rx_opt.num_sacks = 1;
 			tp->selective_acks[0].start_seq = seq;
 			tp->selective_acks[0].end_seq = end_seq;
 		}
+		// 初始化节点
 		rb_link_node(&skb->rbnode, NULL, p);
+		// 添加到乱序队列中(加入红黑树)
 		rb_insert_color(&skb->rbnode, &tp->out_of_order_queue);
 		tp->ooo_last_skb = skb;
 		goto end;
@@ -5005,6 +5116,8 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 	/* In the typical case, we are adding an skb to the end of the list.
 	 * Use of ooo_last_skb avoids the O(Log(N)) rbtree lookup.
 	 */
+	// 如果是经典情况，我们将一个skb加在列表的末尾，
+	// 使用ooo_last_skb可以防止复杂度为O(Log(N))的红黑树查找。
 	if (tcp_ooo_try_coalesce(sk, tp->ooo_last_skb,
 				 skb, &fragstolen)) {
 coalesce_done:
@@ -5018,6 +5131,8 @@ coalesce_done:
 		goto add_sack;
 	}
 	/* Can avoid an rbtree lookup if we are adding skb after ooo_last_skb */
+	// 如果把skb加到ooo_last_skb可以避免查找
+	// 如果收到的段在ooo_last_skb的后面，直接将skb挂在ooo_last_skb后面
 	if (!before(seq, TCP_SKB_CB(tp->ooo_last_skb)->end_seq)) {
 		parent = &tp->ooo_last_skb->rbnode;
 		p = &parent->rb_right;
@@ -5025,15 +5140,22 @@ coalesce_done:
 	}
 
 	/* Find place to insert this segment. Handle overlaps on the way. */
+	// 找到合适的位置插入段
 	parent = NULL;
 	while (*p) {
 		parent = *p;
+		// 得到父节点对应的skb
 		skb1 = rb_to_skb(parent);
+		// 如果新的段在在父节点的前面，往左走
 		if (before(seq, TCP_SKB_CB(skb1)->seq)) {
 			p = &parent->rb_left;
 			continue;
 		}
-		if (before(seq, TCP_SKB_CB(skb1)->end_seq)) {
+		// 如果和父节点的段有重叠，找到合适的地方插入或者丢弃
+		// 检测到与父节点的段是否有重叠（至少一部分）
+		if (before(seq, TCP_SKB_CB(skb1)->end_seq)) { 
+			// 检测是否包含在前一个段内（被父节点的段包围了），如果是，则丢弃它，
+			// 并设置有关D-SACK的属性，然后跳转到add_sack处增加SACK块。
 			if (!after(end_seq, TCP_SKB_CB(skb1)->end_seq)) {
 				/* All the bits are present. Drop. */
 				NET_INC_STATS(sock_net(sk),
@@ -5044,13 +5166,17 @@ coalesce_done:
 				tcp_dsack_set(sk, seq, end_seq);
 				goto add_sack;
 			}
+			// 再次检测是否与前一个段有部分重叠，如果有，则设置相关的D-SACK属性，
+			// 否则需要重新调整插入的位置（这种情况应该不会出现，在遍历时已经定位了）。
 			if (after(seq, TCP_SKB_CB(skb1)->seq)) {
 				/* Partial overlap. */
 				tcp_dsack_set(sk, seq, TCP_SKB_CB(skb1)->end_seq);
 			} else {
 				/* skb's seq == skb1's seq and skb covers skb1.
 				 * Replace skb1 with skb.
-				 */
+				 */ 
+				// 这种情况下是seq == TCP_SKB_CB(skb1)->seq并且skb覆盖了skb1
+				// 将skb1替换为skb。
 				rb_replace_node(&skb1->rbnode, &skb->rbnode,
 						&tp->out_of_order_queue);
 				tcp_dsack_extend(sk,
@@ -5070,12 +5196,15 @@ coalesce_done:
 	}
 insert:
 	/* Insert segment into RB tree. */
+	// 将数据报插入红黑树
 	rb_link_node(&skb->rbnode, parent, p);
 	rb_insert_color(&skb->rbnode, &tp->out_of_order_queue);
 
 merge_right:
 	/* Remove other segments covered by skb. */
+	// 删除被skb覆盖的数据报
 	while ((skb1 = skb_rb_next(skb)) != NULL) {
+		// 如果不覆盖，就跳出
 		if (!after(end_seq, TCP_SKB_CB(skb1)->seq))
 			break;
 		if (before(end_seq, TCP_SKB_CB(skb1)->end_seq)) {
@@ -5083,6 +5212,7 @@ merge_right:
 					 end_seq);
 			break;
 		}
+		// 删除skb1对应的节点
 		rb_erase(&skb1->rbnode, &tp->out_of_order_queue);
 		tcp_dsack_extend(sk, TCP_SKB_CB(skb1)->seq,
 				 TCP_SKB_CB(skb1)->end_seq);
@@ -5090,9 +5220,11 @@ merge_right:
 		tcp_drop_reason(sk, skb1, SKB_DROP_REASON_TCP_OFOMERGE);
 	}
 	/* If there is no skb after us, we are the last_skb ! */
+	// 如果没有skb在我们后面，那我们就是最后一个
 	if (!skb1)
 		tp->ooo_last_skb = skb;
-
+	// 如果要进行SACK块的设置都会执行到add_sack处，这是接收乱序段的最后一步。
+	// 如果双方都支持SACK选项，则调用tcp_sack_new_ofo_skb设置SACK块。
 add_sack:
 	if (tcp_is_sack(tp))
 		tcp_sack_new_ofo_skb(sk, seq, end_seq);
@@ -5101,9 +5233,11 @@ end:
 		/* For non sack flows, do not grow window to force DUPACK
 		 * and trigger fast retransmit.
 		 */
+		// 对于非sack流，不要扩大窗口去强制DUPACK和触发快速重传
 		if (tcp_is_sack(tp))
 			tcp_grow_window(sk, skb, false);
 		skb_condense(skb);
+		// 设置skb的宿主
 		skb_set_owner_r(skb, sk);
 	}
 }
@@ -5193,26 +5327,39 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 	/* If a subflow has been reset, the packet should not continue
 	 * to be processed, drop the packet.
 	 */
+	// 如果subflow已经被重置，包就不应该再被处理，而是将其丢弃。
 	if (sk_is_mptcp(sk) && !mptcp_incoming_options(sk, skb)) {
 		__kfree_skb(skb);
 		return;
 	}
 
+	// 如果TCP段没有负荷，则把它丢弃后返回。
 	if (TCP_SKB_CB(skb)->seq == TCP_SKB_CB(skb)->end_seq) {
 		__kfree_skb(skb);
 		return;
 	}
 	skb_dst_drop(skb);
+	// 删除tcp首部
 	__skb_pull(skb, tcp_hdr(skb)->doff * 4);
 
 	reason = SKB_DROP_REASON_NOT_SPECIFIED;
+	// 将dsack标志复位
 	tp->rx_opt.dsack = 0;
 
 	/*  Queue data for delivery to the user.
 	 *  Packets in sequence go to the receive queue.
 	 *  Out of sequence packets to the out_of_order_queue.
 	 */
+	// 虽然这是慢速路径中，但最有可能处理的还是预期段，因此接下来比较接收到的段的序号
+	// 与期望的接受序号是否相等，如果相等，则说明是预期的段，可以缓存到接收队列中
+	// 或直接复制到用户空间内，这与快速路径的处理相似。
+
+	// 通过接收到的段的序号与预期的接收序号相比，判断接收到的是否为预期的段。
 	if (TCP_SKB_CB(skb)->seq == tp->rcv_nxt) {
+		// 如果是预期接收的段，那么接着需要判断接收窗口是否还有空间，如果
+		// 接收窗口大小为0，则说明目前不能接收数据，因此需立刻给发送方发送ACK，
+		// 让发送方知道接收方的接收窗口大小为0，然后丢弃该段后返回，
+		// 具体转到out_of_window查看。
 		if (tcp_receive_window(tp) == 0) {
 			reason = SKB_DROP_REASON_TCP_ZEROWINDOW;
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPZEROWINDOWDROP);
@@ -5221,21 +5368,28 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 
 		/* Ok. In sequence. In window. */
 queue_and_out:
+		// 如果接收队列sk_receive_queue为空，使用sk_forced_mem_schedule函数强制分配缓存额度，
+		// 否则，使用tcp_try_rmem_schedule函数进行正常分配并检查缓存是否超限。
 		if (skb_queue_len(&sk->sk_receive_queue) == 0)
 			sk_forced_mem_schedule(sk, skb->truesize);
+		// 调用预分配缓存额度函数,如果失败返回-1，就抛弃消息
 		else if (tcp_try_rmem_schedule(sk, skb, skb->truesize)) {
 			reason = SKB_DROP_REASON_PROTO_MEM;
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPRCVQDROP);
 			sk->sk_data_ready(sk);
 			goto drop;
 		}
-
+		// 最后使用tcp_queue_rcv函数完成接收工作，同时通过调用skb_set_owner_r函数使用分配的缓存额度，
 		eaten = tcp_queue_rcv(sk, skb, &fragstolen);
+		// 如果接收到的段存在数据，则调用tcp_event_data_recv处理一些数据接收相关的操作，
+		// 主要是有关延时ACK以及ECN标志的处理等
 		if (skb->len)
 			tcp_event_data_recv(sk, skb);
+		// 如果接收到的段存在FIN标志，则调用tcp_fin处理
 		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN)
 			tcp_fin(sk);
-
+		// 检测缓存乱序队列中是否存在可以确认的段，如果有，则调用tcp_ofo_queue处理，
+		// 将其转移到接收队列中。
 		if (!RB_EMPTY_ROOT(&tp->out_of_order_queue)) {
 			tcp_ofo_queue(sk);
 
@@ -5245,12 +5399,16 @@ queue_and_out:
 			if (RB_EMPTY_ROOT(&tp->out_of_order_queue))
 				inet_csk(sk)->icsk_ack.pending |= ICSK_ACK_NOW;
 		}
-
+		// 如果待回复的ACK段中存在SACK选项，则需根据接收到的段，
+		// 调整用户构成SACK选项的selective_acks数组。
 		if (tp->rx_opt.num_sacks)
 			tcp_sack_remove(tp);
-
+		// 在满足条件的情况下，重新设置TCP首部预测标志
 		tcp_fast_path_check(sk);
 
+		// 如果数据已经复制到用户空间，则说明已经把进程唤醒了，因此将套接口释放。
+		// 因此将套接口释放。如果没有复制到用户空间且套接口的连接未断开，
+		// 则唤醒等待该套接口的所有进程。
 		if (eaten > 0)
 			kfree_skb_partial(skb, fragstolen);
 		if (!sock_flag(sk, SOCK_DEAD))
@@ -5258,6 +5416,7 @@ queue_and_out:
 		return;
 	}
 
+	// 如果接收的段过早，已确认过了，则处理SACK选项的D-SACK，在下个确认中发送。
 	if (!after(TCP_SKB_CB(skb)->end_seq, tp->rcv_nxt)) {
 		tcp_rcv_spurious_retrans(sk, skb);
 		/* A retransmit, 2nd most common case.  Force an immediate ack. */
@@ -5266,20 +5425,25 @@ queue_and_out:
 		tcp_dsack_set(sk, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq);
 
 out_of_window:
+		// 然后调度ACK，让确认段尽可能快地发送给对方，对端尽可能早知道接收方接收到了相同的段。
 		tcp_enter_quickack_mode(sk, TCP_MAX_QUICKACKS);
 		inet_csk_schedule_ack(sk);
 drop:
+		// 丢弃数据包
 		tcp_drop_reason(sk, skb, reason);
 		return;
 	}
 
 	/* Out of window. F.e. zero window probe. */
+	// 如果接收到的序号过大，在接受窗口之外，那么处理方法跟接收到过早的段一样
 	if (!before(TCP_SKB_CB(skb)->seq,
 		    tp->rcv_nxt + tcp_receive_window(tp))) {
 		reason = SKB_DROP_REASON_TCP_OVERWINDOW;
 		goto out_of_window;
 	}
-
+	// 如果接收到的段有一部分已经接收，则先处理SACK选项的D-SACK，在下个确认中发送。
+	// 然后检测接收窗口是否为0，如果为0， 则暂时不能接收，跳转到out_of_window处作丢弃等处理。
+	// 如果接收窗口不为0，则说明现在可以接收，因此跳转到queue_and_out处接收数据。
 	if (before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt)) {
 		/* Partial packet, seq < rcv_next < end_seq */
 		tcp_dsack_set(sk, TCP_SKB_CB(skb)->seq, tp->rcv_nxt);
@@ -5294,7 +5458,11 @@ drop:
 		}
 		goto queue_and_out;
 	}
-
+	// 接收处理乱序的段
+	// 预期的段和在接收窗口之外的段都处理了，最后处理既在接收窗口之内又不是预期的段，
+	// 这些段的失序接收，有可能是网络拥塞或其他原因造成的。这些段需要暂时缓存起来，
+	// 一旦接收到了它之前的所有段，就可以把它从乱序队列中移至接收队列中，
+	// 这样发送方就不必重传这些段了，从而可以节省一部分网络带宽。
 	tcp_data_queue_ofo(sk, skb);
 }
 
@@ -5758,17 +5926,23 @@ static inline void tcp_ack_snd_check(struct sock *sk)
  *	For 1003.1g we should support a new option TCP_STDURG to permit
  *	either form (or just set the sysctl tcp_stdurg).
  */
-
+// tcp_check_urg用于检测段中的带外数据是否有效，同时设置带外数据序号以及标志，
+// 以便后续根据标志做相应的处理。
 static void tcp_check_urg(struct sock *sk, const struct tcphdr *th)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	u32 ptr = ntohs(th->urg_ptr);
 
+	// 计算带外数据的位置。目前仍有许多关于紧急指针是指向带外数据的最后一个字节
+	// 还是指向带外数据最后一个字节的下一个字节的争论。Host Requirements RFC确定
+	// 指向最后一个字节是正常的。然而，大多数的实现，包括源自BSD的实现，继续使用错误的
+	// 解释。因此如果启用兼容错误选项，则需将指针前移。
 	if (ptr && !sock_net(sk)->ipv4.sysctl_tcp_stdurg)
 		ptr--;
 	ptr += ntohl(th->seq);
 
 	/* Ignore urgent data that we've already seen and read. */
+	// 带外数据已被用户进程读取过或者接收过，则无需再读取了。
 	if (after(tp->copied_seq, ptr))
 		return;
 
@@ -5786,10 +5960,13 @@ static void tcp_check_urg(struct sock *sk, const struct tcphdr *th)
 		return;
 
 	/* Do we already have a newer (or duplicate) urgent pointer? */
+	// 如果还有带外数据用户进程尚未读取，且当前带外数据早于该尚未读取的带外数据，
+	// 则丢弃该带外数据。
 	if (tp->urg_data && !after(ptr, tp->urg_seq))
 		return;
 
 	/* Tell the world about our new urgent pointer. */
+	// 唤醒异步等待该套接口的进程，告诉它们有新的带外数据到达。
 	sk_send_sigurg(sk);
 
 	/* We may be adding urgent data when the last byte read was
@@ -5807,6 +5984,10 @@ static void tcp_check_urg(struct sock *sk, const struct tcphdr *th)
 	 * decline of BSD again. Verdict: it is better to remove to trap
 	 * buggy users.
 	 */
+	// 在当前接收到带外数据的段的序号正在接下来需要复制到进程空间的段的序号，
+	// 且下一个接收段的序号与需要复制到进程空间的序号相等的情况下，需要检测接收队伍中
+	// 的第一个段是否有效，因为当前处理的是带外数据，因此需要递增copied_seq。接着检测接收
+	// 队列中第一个段是否已过期，如果是则将其释放。image.png
 	if (tp->urg_seq == tp->copied_seq && tp->urg_data &&
 	    !sock_flag(sk, SOCK_URGINLINE) && tp->copied_seq != tp->rcv_nxt) {
 		struct sk_buff *skb = skb_peek(&sk->sk_receive_queue);
@@ -5816,7 +5997,8 @@ static void tcp_check_urg(struct sock *sk, const struct tcphdr *th)
 			__kfree_skb(skb);
 		}
 	}
-
+	// 设置带外数据序号以及标志，以便后续根据标志作相应的处理。最后，由于接收到了带外数据，
+	// 因此禁止下次的首部预测。
 	WRITE_ONCE(tp->urg_data, TCP_URG_NOTYET);
 	WRITE_ONCE(tp->urg_seq, ptr);
 
@@ -5825,15 +6007,23 @@ static void tcp_check_urg(struct sock *sk, const struct tcphdr *th)
 }
 
 /* This is the 'fast' part of urgent handling. */
+// 这是紧急处理的快速部分
+// 带外数据处理的对象是URG标志置位时的段,参数为待处理的TCP首部。
 static void tcp_urg(struct sock *sk, struct sk_buff *skb, const struct tcphdr *th)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	/* Check if we get a new urgent pointer - normally not. */
+	// 检测是否带有带外数据指针，一般是没有的
+	// 如果TCP首部带有URG标志，则应该带外数据偏移量urg_seq为应该非零，
+	// 因此需要检测带外数据偏移量urg_seq是否正常。
 	if (unlikely(th->urg))
 		tcp_check_urg(sk, th);
 
 	/* Do we wait for any urgent data? - normally not... */
+	// 如果urg_data为TCP_URG_NOTYET，则表示当前处理段中的带外数据有效。
+	// 然后读取该带外数据到urg_data中，并设置TCP_URG_VALID标志表示用户进程
+	// 可以读取，然后通知用户进程读取
 	if (unlikely(tp->urg_data == TCP_URG_NOTYET)) {
 		u32 ptr = tp->urg_seq - ntohl(th->seq) + (th->doff * 4) -
 			  th->syn;

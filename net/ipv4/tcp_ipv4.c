@@ -357,15 +357,23 @@ EXPORT_SYMBOL(tcp_v4_connect);
  * It can be called through tcp_release_cb() if socket was owned by user
  * at the time tcp_v4_err() was called to handle ICMP message.
  */
+// 该函数对定义在RFC1191中的ICMP_FRAG_NEEDED mut指示做出反应
+// 如果套接字为用户所有可以通过tcp_release_cb调用它,它能够被在tcp_v4_err()中调用来处理ICMP消息， 
 void tcp_v4_mtu_reduced(struct sock *sk)
 {
 	struct inet_sock *inet = inet_sk(sk);
 	struct dst_entry *dst;
 	u32 mtu;
-
+	// 如果在侦听状态或者关闭状态，直接返回
+	// 在侦听状态下，不需要进行路径MTU发现，因为在该状态下输出的SYN+ACK段总是小于536B，
+	// 因此输出的IP数据报不会被分片。
 	if ((1 << sk->sk_state) & (TCPF_LISTEN | TCPF_CLOSE))
 		return;
+	// 得到记录的下一跳的mtu
 	mtu = READ_ONCE(tcp_sk(sk)->mtu_info);
+	// 将获取的下一跳的MTU更新到与路由相关的路由缓存项的度量值中。
+	// 如果存储在路由缓存项的度量值中的PMTU大于下一跳的MTU，且发送出的IP数据报禁止
+	// 分片，则需报告相应的错误。
 	dst = inet_csk_update_pmtu(sk, mtu);
 	if (!dst)
 		return;
@@ -377,7 +385,8 @@ void tcp_v4_mtu_reduced(struct sock *sk)
 		sk->sk_err_soft = EMSGSIZE;
 
 	mtu = dst_mtu(dst);
-
+	// 在允许路径MTU发现的情况下，如果缓存在传输控制块中的路径MTU值大于新的值，
+	// 则需要新的路径MTU值更新到传输控制块的缓存中，同时更新MSS，最后重传。
 	if (inet->pmtudisc != IP_PMTUDISC_DONT &&
 	    ip_sk_accept_pmtu(sk) &&
 	    inet_csk(sk)->icsk_pmtu_cookie > mtu) {
