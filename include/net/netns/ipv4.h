@@ -32,8 +32,9 @@ struct inet_hashinfo;
 
 struct inet_timewait_death_row {
 	refcount_t		tw_refcount;
-
+	// 指向inet_hashinfo结构类型实例的tcp_hashinfo
 	struct inet_hashinfo 	*hashinfo ____cacheline_aligned_in_smp;
+	// 用来存储系统参数tcp_max_tw_buckets的值
 	int			sysctl_max_tw_buckets;
 };
 

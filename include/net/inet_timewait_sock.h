@@ -30,11 +30,15 @@ struct inet_bind_bucket;
  * problems of sockets in such a state on heavily loaded servers, but
  * without violating the protocol specification.
  */
+// inet_timewait_sock结构用于组成tcp_timewait_sock结构，同时其前部也是由
+// sock_common结构组成的。由于tcp_sock结构前部也由sock_common结构组成，
+// 因此访问sock_common结构的成员时，可以不加区分。
 struct inet_timewait_sock {
 	/*
 	 * Now struct sock also uses sock_common, so please just
 	 * don't add nothing before this first member (__tw_common) --acme
 	 */
+	// inet_timewait_sock结构的前部由sock_common结构组成
 	struct sock_common	__tw_common;
 #define tw_family		__tw_common.skc_family
 #define tw_state		__tw_common.skc_state
@@ -58,6 +62,10 @@ struct inet_timewait_sock {
 #define tw_dr			__tw_common.skc_tw_dr
 
 	__u32			tw_mark;
+	// 由于TCP状态迁移到FIN_WAIT2或TIME_WAIT状态时，都需要由定时器来处理，
+	// 一旦超过套接口随即就被释放.一旦用timewait控制块取代tcp_socket传输控制块后，
+	// 其对外的状态是TIME_WAIT，而内部状态还是有区别的，因此需要用tw_substate来
+	// 标识FIN_WAIT2或TIME_WAIT。
 	volatile unsigned char	tw_substate;
 	unsigned char		tw_rcv_wscale;
 
@@ -72,6 +80,7 @@ struct inet_timewait_sock {
 	u32			tw_txhash;
 	u32			tw_priority;
 	struct timer_list	tw_timer;
+	// 指向绑定的本地端口信息，由对应的TCP传输控制块的icsk_bind_hash成员得到。
 	struct inet_bind_bucket	*tw_tb;
 };
 #define tw_tclass tw_tos

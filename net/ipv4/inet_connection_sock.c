@@ -1251,6 +1251,8 @@ EXPORT_SYMBOL(inet_csk_complete_hashdance);
  *	This routine closes sockets which have been at least partially
  *	opened, but not yet accepted.
  */
+// 此例程关闭已至少部分打开但尚未接受的套接字。
+// 调用并释放TCP传输控制块中处于半连接状态的连接请求块
 void inet_csk_listen_stop(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);

@@ -586,7 +586,10 @@ static inline struct tcp_sock *tcp_sk(const struct sock *sk)
 	return (struct tcp_sock *)sk;
 }
 
+// 大部分成员与tcp_sock结构的对应成员意义相同，只是在名称前面添加了"tw",
+// 这些成员的值都是在创建tcp_timewait_sock实例时从tcp_sock结构中获取。
 struct tcp_timewait_sock {
+	// tcp_timewait_sock的前部由inet_timewait_sock组成
 	struct inet_timewait_sock tw_sk;
 #define tw_rcv_nxt tw_sk.__tw_common.skc_tw_rcv_nxt
 #define tw_snd_nxt tw_sk.__tw_common.skc_tw_snd_nxt

@@ -243,20 +243,26 @@ EXPORT_SYMBOL(tcp_timewait_state_process);
 /*
  * Move a socket to time-wait or dead fin-wait-2 state.
  */
+// 将一个socket转移到time-wait或者死亡的fin-wait-2状态
+// sk：被取代的传输控制块
+// state：为timewait控制块内部的状态
+// timeo：为等待超时时间
 void tcp_time_wait(struct sock *sk, int state, int timeo)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);
 	const struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_timewait_sock *tw;
 	struct inet_timewait_death_row *tcp_death_row = sock_net(sk)->ipv4.tcp_death_row;
-
+	// 分配timewait控制块，并根据传输控制块设置其对应的属性和内部状态。
 	tw = inet_twsk_alloc(sk, tcp_death_row, state);
-
+	// 如果timewait控制块分配成功，则做相应设置，同时进入TIME_WAIT状态
 	if (tw) {
 		struct tcp_timewait_sock *tcptw = tcp_twsk((struct sock *)tw);
+		// 根据超时重传的时间计算TIME_WAIT状态的超时时间，后者是前者的3.5倍
 		const int rto = (icsk->icsk_rto << 2) - (icsk->icsk_rto >> 1);
 		struct inet_sock *inet = inet_sk(sk);
 
+		// 从TCP控制块中获取对应的属性值设置到timewait控制块中
 		tw->tw_transparent	= inet->transparent;
 		tw->tw_mark		= sk->sk_mark;
 		tw->tw_priority		= sk->sk_priority;
@@ -269,6 +275,7 @@ void tcp_time_wait(struct sock *sk, int state, int timeo)
 		tcptw->tw_ts_offset	= tp->tsoffset;
 		tcptw->tw_last_oow_ack_time = 0;
 		tcptw->tw_tx_delay	= tp->tcp_tx_delay;
+		// IP v6操作相关
 #if IS_ENABLED(CONFIG_IPV6)
 		if (tw->tw_family == PF_INET6) {
 			struct ipv6_pinfo *np = inet6_sk(sk);
@@ -281,7 +288,7 @@ void tcp_time_wait(struct sock *sk, int state, int timeo)
 			tw->tw_ipv6only = sk->sk_ipv6only;
 		}
 #endif
-
+		// 通过TCP MD5签名来保护BGP会话操作相关
 #ifdef CONFIG_TCP_MD5SIG
 		/*
 		 * The timewait bucket does not have the key DB from the
@@ -304,9 +311,10 @@ void tcp_time_wait(struct sock *sk, int state, int timeo)
 #endif
 
 		/* Get the TIME_WAIT timeout firing. */
+		// TIME_WAIT的超时时间不得小于3.5倍的超时重传的时间
 		if (timeo < rto)
 			timeo = rto;
-
+		// 如果状态为TIME_WAIT，将超时时间设置为60秒
 		if (state == TCP_TIME_WAIT)
 			timeo = TCP_TIMEWAIT_LEN;
 
@@ -315,10 +323,15 @@ void tcp_time_wait(struct sock *sk, int state, int timeo)
 		 * we complete the initialization.
 		 */
 		local_bh_disable();
+		// 进入TIME_WAIT状态，并启动TIME_WAIT定时器
 		inet_twsk_schedule(tw, timeo);
 		/* Linkage updates.
 		 * Note that access to tw after this point is illegal.
 		 */
+		// 将timewait控制块添加到tcp_hashinfo的ehash散列表中，将被替代的TCP控制块
+		// 从ehash中删除。这样FIN_WAIT2和TIME_WAIT状态下也可以进行输入的处理。
+		// 同时将该timewait控制块添加到bhash散列表中，但并不删除该散列表中被替代的TCP
+		// 控制块，因为只要inet->num不为0，这个绑定关系就存在，即使该套接口已经关闭。
 		inet_twsk_hashdance(tw, sk, &tcp_hashinfo);
 		local_bh_enable();
 	} else {
@@ -328,7 +341,7 @@ void tcp_time_wait(struct sock *sk, int state, int timeo)
 		 */
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPTIMEWAITOVERFLOW);
 	}
-
+	// 将TCP中的一些测量值更新到它路由缓存项的度量值中，然后关闭并释放传输控制块。
 	tcp_update_metrics(sk);
 	tcp_done(sk);
 }

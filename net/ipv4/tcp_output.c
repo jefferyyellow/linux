@@ -3560,6 +3560,12 @@ void sk_forced_mem_schedule(struct sock *sk, int size)
 /* Send a FIN. The caller locks the socket for us.
  * We should try to send a FIN packet really hard, but eventually give up.
  */
+// 发送一个FIN，调用者为我们锁定了socket
+// 1.有用发送FIN无需占用额外的负载，因此如果发送队列不空，则在发送队列的最后一个TCP段
+//   上设置FIN标志。但FIN标志会占用一个序号，因此需递增序号。
+// 2.如果发送队列为空，则需构造一个新的TCP段，但该TCP段不需要负荷，只需要TCP首部即可。
+//   设置相应得值，然后添加到发送队列中。
+// 3.最后关闭Nagle算法，立即将发送队列上未发送得段（包括FIN段）全部发送出去。
 void tcp_send_fin(struct sock *sk)
 {
 	struct sk_buff *skb, *tskb, *tail = tcp_write_queue_tail(sk);

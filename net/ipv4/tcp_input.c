@@ -4618,20 +4618,23 @@ void tcp_reset(struct sock *sk, struct sk_buff *skb)
 void tcp_fin(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-
+	// 接收到FIN段后，需调度，发送ACK
 	inet_csk_schedule_ack(sk);
-	// 接收方向进行关闭
+	// 设置传输控制块的套接口状态为RCV_SHUTDOWN，表示不允许继续接收数据
 	sk->sk_shutdown |= RCV_SHUTDOWN;
+	// 设置传输控制块SOCK_DONE标志，表示TCP会话即将结束
 	sock_set_flag(sk, SOCK_DONE);
 
 	switch (sk->sk_state) {
+	// 在SYN_RECV和ESTABLISHED状态，接收到FIN段后，将状态设置为CLOSE_WAIT，并确定延时发送ACK
 	case TCP_SYN_RECV:
 	case TCP_ESTABLISHED:
 		/* Move to CLOSE_WAIT */
 		tcp_set_state(sk, TCP_CLOSE_WAIT);
 		inet_csk_enter_pingpong_mode(sk);
 		break;
-
+	// 在CLOSE_WAIT状态接收到FIN段，则说明接收到的是重复的FIN段，忽略。
+	// 在CLOSING状态接收到FIN段，也将其忽略，因为在该状态只需等待ACK。
 	case TCP_CLOSE_WAIT:
 	case TCP_CLOSING:
 		/* Received a retransmission of the FIN, do
@@ -4641,7 +4644,7 @@ void tcp_fin(struct sock *sk)
 	case TCP_LAST_ACK:
 		/* RFC793: Remain in the LAST-ACK state. */
 		break;
-
+	// 根据TCP状态迁移图，在FIN_WAIT1状态接收FIN段，则发送ACK，进入CLOSING状态，并等待对端的ACK。
 	case TCP_FIN_WAIT1:
 		/* This case occurs when a simultaneous close
 		 * happens, we must ack the received FIN and
@@ -4650,11 +4653,13 @@ void tcp_fin(struct sock *sk)
 		tcp_send_ack(sk);
 		tcp_set_state(sk, TCP_CLOSING);
 		break;
+	// 根据TCP状态迁移图，在FIN_WAIT2状态接收FIN段，则发送ACK，进入TIME_WAIT状态
 	case TCP_FIN_WAIT2:
 		/* Received a FIN -- send ACK and enter TIME_WAIT. */
 		tcp_send_ack(sk);
 		tcp_time_wait(sk, TCP_TIME_WAIT, 0);
 		break;
+	// 在LISTEN和CLOSE状态忽略FIN段
 	default:
 		/* Only TCP_LISTEN and TCP_CLOSE are left, in these
 		 * cases we should never reach this piece of code.
@@ -4667,11 +4672,15 @@ void tcp_fin(struct sock *sk)
 	/* It _is_ possible, that we have something out-of-order _after_ FIN.
 	 * Probably, we should reset in this case. For now drop them.
 	 */
+	// 清空接收到乱序队列上的段，再清除有关SACK的信息和标志，最后释放已接收到接收队列中的段。
 	skb_rbtree_purge(&tp->out_of_order_queue);
 	if (tcp_is_sack(tp))
 		tcp_sack_reset(&tp->rx_opt);
 	sk_mem_reclaim(sk);
 
+	// 如果此时套接口未处于DEAD状态，则唤醒等待该套接字的进程。如果在发送接收方向上都进行了关闭，
+	// 或者此时该传输控制块处于CLOSE状态，则唤醒异步等待该套接口的进程，通知它们该连接已终止，
+	// 否则通知它们连接可用进行写操作。
 	if (!sock_flag(sk, SOCK_DEAD)) {
 		sk->sk_state_change(sk);
 
@@ -6911,6 +6920,7 @@ static void tcp_rcv_synrecv_state_fastopen(struct sock *sk)
  */
 // sk：处理TCP段的传输控制块
 // skb：接收到的TCP段
+// 该函数实现了除ESTABLISHED和TIME_WAIT状态以外的所有其他状态中RFC 793规定的接收步骤
 int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -7067,27 +7077,30 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		// 计算有关TCP首部预测的标准
 		tcp_fast_path_on(tp);
 		break;
-
+	// FIN_WAIT1状态下的ack段处理
 	case TCP_FIN_WAIT1: {
 		int tmo;
 
 		if (req)
 			tcp_rcv_synrecv_state_fastopen(sk);
-
+		// 如果不是ACK的确认，直接跳出，
+		// 如果是ACK的确认，所有的发送段（包括FIN段）对方都已收到，
 		if (tp->snd_una != tp->write_seq)
 			break;
-
+		// 从FIN_WAIT1状态迁移到FIN_WAIT2状态
 		tcp_set_state(sk, TCP_FIN_WAIT2);
+		// 并关闭发送方向的连接
 		sk->sk_shutdown |= SEND_SHUTDOWN;
-
+		// 因为从对端接收到ACK段，因此可以确认路由缓存有效。
 		sk_dst_confirm(sk);
-
+		// 如果套接口不在SOCK_DEAD状态下，由于TCP状态发生了变化，因此唤醒
+		// 那些等待本套接口的进程
 		if (!sock_flag(sk, SOCK_DEAD)) {
 			/* Wake up lingering close() */
 			sk->sk_state_change(sk);
 			break;
 		}
-
+		// 如果linger2小于0，则说明无需在FIN_WAIT2状态等待，直接关闭传输控制块
 		if (tp->linger2 < 0) {
 			tcp_done(sk);
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPABORTONDATA);
@@ -7120,14 +7133,17 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		}
 		break;
 	}
-
+	// 如果通过ACK确认，所有的发送段（包括FIN段）对方都已经收到，
+	// 则从CLOSING状态迁移到TIME_WAIT状态，作2MSL超时等待
 	case TCP_CLOSING:
 		if (tp->snd_una == tp->write_seq) {
 			tcp_time_wait(sk, TCP_TIME_WAIT, 0);
 			goto consume;
 		}
 		break;
-
+	// 如果通过ACK确认，所有的发送段（包括FIN段）对方都已经收到，
+	// 则从LAST_ACK状态迁移到CLOSE状态，把相关的metrics更新到目的路由项中，
+	// 并关闭传输控制块。
 	case TCP_LAST_ACK:
 		if (tp->snd_una == tp->write_seq) {
 			tcp_update_metrics(sk);

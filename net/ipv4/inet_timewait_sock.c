@@ -215,6 +215,10 @@ void inet_twsk_deschedule_put(struct inet_timewait_sock *tw)
 }
 EXPORT_SYMBOL(inet_twsk_deschedule_put);
 
+// __inet_twsk_schedule用于启动FIN_WAIT2或TIME_WAIT定时器，虽然启动这两个定时器用的是
+// 同一接口，但是根据timewait控制块的tw_substate很明确地区分当前启动的是哪个定时器
+// tw：已经替代TCP传输控制块的timewait控制块
+// timeo：设定定时器的超时时间
 void __inet_twsk_schedule(struct inet_timewait_sock *tw, int timeo, bool rearm)
 {
 	/* timeout := RTO * 3.5
@@ -241,7 +245,6 @@ void __inet_twsk_schedule(struct inet_timewait_sock *tw, int timeo, bool rearm)
 	 * is greater than TS tick!) and detect old duplicates with help
 	 * of PAWS.
 	 */
-
 	if (!rearm) {
 		bool kill = timeo <= 4*HZ;
 
