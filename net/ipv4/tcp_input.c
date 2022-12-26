@@ -7155,6 +7155,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 
 	/* step 6: check the URG bit */
 	// 检测“带外数据”标志位
+	// 处理带外数据
 	tcp_urg(sk, skb, th);
 
 	/* step 7: process the segment text */
@@ -7162,6 +7163,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	case TCP_CLOSE_WAIT:
 	case TCP_CLOSING:
 	case TCP_LAST_ACK:
+	// 如果接收到已经确认过的段，则直接丢弃，否则与FIN_WAIT1和FIN_WAIT2状态的处理方式一样。
 		if (!before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt)) {
 			/* If a subflow has been reset, the packet should not
 			 * continue to be processed, drop the packet.
@@ -7177,6 +7179,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		 * RFC 1122 says we MUST send a reset.
 		 * BSD 4.4 also does reset.
 		 */
+		// 如果接收方向已经关闭，而又接收到新的数据，则需给对端发送RST段，说明接收方已丢弃了该数据。
 		if (sk->sk_shutdown & RCV_SHUTDOWN) {
 			if (TCP_SKB_CB(skb)->end_seq != TCP_SKB_CB(skb)->seq &&
 			    after(TCP_SKB_CB(skb)->end_seq - th->fin, tp->rcv_nxt)) {
@@ -7194,7 +7197,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	}
 
 	/* tcp_data could move socket to TIME-WAIT */
-	// 如果状态不为CLOSE时，检测是否有数据和ACK需发送。
+	// 如果TCP不处于CLOSE状态，则发送队列的段，同时调度ACK，确定是立即发送ACK还是延迟发送
 	if (sk->sk_state != TCP_CLOSE) {
 		tcp_data_snd_check(sk);
 		tcp_ack_snd_check(sk);

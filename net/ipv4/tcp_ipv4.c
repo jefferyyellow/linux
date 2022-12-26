@@ -2257,21 +2257,31 @@ discard_and_relse:
 	if (refcounted)
 		sock_put(sk);
 	goto discard_it;
-	// 处理传输控制块处于TIME_WAIT状态的情况
+	// 处理传输控制块处于TIME_WAIT状态的情况，首先对段进行相关的校验。
 do_time_wait:
+	// 调用xfrm4_policy_check查找IPSec策略数据库，如果失败则减少对该传输控制块
+	// 的引用后跳转到discard_it处直接丢弃报文
 	if (!xfrm4_policy_check(NULL, XFRM_POLICY_IN, skb)) {
 		drop_reason = SKB_DROP_REASON_XFRM_POLICY;
 		inet_twsk_put(inet_twsk(sk));
 		goto discard_it;
 	}
 
+	// 根据TCP首部中的信息来设置TCP控制块中的值，
 	tcp_v4_fill_cb(skb, iph, th);
-
+	// 检测该段的长度和校验和，如果有异常说明该数据包已损坏，则减少对该传输控制块的引用后
+	// 跳转到csum_error处直接丢弃该数据包
 	if (tcp_checksum_complete(skb)) {
 		inet_twsk_put(inet_twsk(sk));
 		goto csum_error;
 	}
+	// 由tcp_timewait_state_process处理在TIME_WAIT和FIN_WAIT_2状态下接收到的段，
+	// 并根据返回值作相应的处理：
 	switch (tcp_timewait_state_process(inet_twsk(sk), skb, th)) {
+	// 说明在TIME_WAIT状态下接收到了连接请求，且可接受该请求，
+	// 调用inet_lookup_listener根据目的地址和目的端口，在bhash散列表中查找对应的
+	// 已绑定端口并处于侦听状态的传输控制块。如果查找命中，则释放timewait控制块，
+	// 然后跳转到process处进行正常的连接请求处理。
 	case TCP_TW_SYN: {
 		struct sock *sk2 = inet_lookup_listener(dev_net(skb->dev),
 							&tcp_hashinfo, skb,
@@ -2290,13 +2300,16 @@ do_time_wait:
 	}
 		/* to ACK */
 		fallthrough;
+	// 调用tcp_v4_timewait_ack发送相应的ACK
 	case TCP_TW_ACK:
 		tcp_v4_timewait_ack(sk, skb);
 		break;
+	// 表示接收到了无效的段，需给对端发送RST段
 	case TCP_TW_RST:
 		tcp_v4_send_reset(sk, skb);
 		inet_twsk_deschedule_put(inet_twsk(sk));
 		goto discard_it;
+	// 不做任何处理
 	case TCP_TW_SUCCESS:;
 	}
 	goto discard_it;

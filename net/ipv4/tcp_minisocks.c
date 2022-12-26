@@ -81,6 +81,14 @@ tcp_timewait_check_oow_rate_limit(struct inet_timewait_sock *tw,
  *
  * We don't need to initialize tmp_out.sack_ok as we don't use the results
  */
+// tcp_timewait_state_process用于处理在FIN_WAIT2和TIME_WAIT状态下接收到的段。
+// tw：接收处理段的timewait控制块
+// skb：FIN_WAIT2和TIME_WAIT状态下接收到的段。
+// 返回值：
+// TCP_TW_SYN: 说明在TIME_WAIT状态下接收到了连接请求，且可接受该请求
+// TCP_TW_ACK: 发送ACK给对端
+// TCP_TW_RST: 表示接收到了无效的段，需给对端发送RST段
+// TCP_TW_SUCCESS: 不做任何处理
 enum tcp_tw_status
 tcp_timewait_state_process(struct inet_timewait_sock *tw, struct sk_buff *skb,
 			   const struct tcphdr *th)
@@ -90,9 +98,10 @@ tcp_timewait_state_process(struct inet_timewait_sock *tw, struct sk_buff *skb,
 	bool paws_reject = false;
 
 	tmp_opt.saw_tstamp = 0;
+	// 如果接收到TCP段中存在选项，则解析获取其中的选项。
 	if (th->doff > (sizeof(*th) >> 2) && tcptw->tw_ts_recent_stamp) {
 		tcp_parse_options(twsk_net(tw), skb, &tmp_opt, 0, NULL);
-
+		// 如果其中存在时间戳选项，则还需作序号回卷的检测，判断序号是否有效。
 		if (tmp_opt.saw_tstamp) {
 			if (tmp_opt.rcv_tsecr)
 				tmp_opt.rcv_tsecr -= tcptw->tw_ts_offset;
@@ -101,11 +110,12 @@ tcp_timewait_state_process(struct inet_timewait_sock *tw, struct sk_buff *skb,
 			paws_reject = tcp_paws_reject(&tmp_opt, th->rst);
 		}
 	}
-
+	// FIN_WAIT_2状态的输入处理
 	if (tw->tw_substate == TCP_FIN_WAIT2) {
 		/* Just repeat all the checks of tcp_rcv_state_process() */
 
 		/* Out of window, send ACK */
+		// 如果TCP段的序号无效，或TCP段序号不完全在接收窗口内，则返回TCP_TW_ACK，表示需给对端发送ACK
 		if (paws_reject ||
 		    !tcp_in_window(TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq,
 				   tcptw->tw_rcv_nxt,
@@ -113,13 +123,16 @@ tcp_timewait_state_process(struct inet_timewait_sock *tw, struct sk_buff *skb,
 			return tcp_timewait_check_oow_rate_limit(
 				tw, skb, LINUX_MIB_TCPACKSKIPPEDFINWAIT2);
 
+		// 在FIN_WAIT_2状态下接收到RST段，则跳转到kill处立即释放该timewait控制块，
+		// 并返回TCP_TW_SUCCESS.
 		if (th->rst)
 			goto kill;
-
+		// 如果接收到过去的SYN段，则返回TCP_TW_RST
 		if (th->syn && !before(TCP_SKB_CB(skb)->seq, tcptw->tw_rcv_nxt))
 			return TCP_TW_RST;
 
 		/* Dup ACK? */
+		// 如果接收到DACK，则释放该timewait控制块，并返回TCP_TW_SUCCESS。
 		if (!th->ack ||
 		    !after(TCP_SKB_CB(skb)->end_seq, tcptw->tw_rcv_nxt) ||
 		    TCP_SKB_CB(skb)->end_seq == TCP_SKB_CB(skb)->seq) {
@@ -130,19 +143,23 @@ tcp_timewait_state_process(struct inet_timewait_sock *tw, struct sk_buff *skb,
 		/* New data or FIN. If new data arrive after half-duplex close,
 		 * reset.
 		 */
+		// 如果在FIN_WAIT_2状态下接收到非FIN段，或接收到的段序号与预期不符，
+		// 返回TCP_TW_RST
 		if (!th->fin ||
 		    TCP_SKB_CB(skb)->end_seq != tcptw->tw_rcv_nxt + 1)
 			return TCP_TW_RST;
 
 		/* FIN arrived, enter true time-wait state. */
+		// 如果接收到有效的FIN段，则timewait控制块进入TIME_WAIT状态，同时设置时间戳相关属性。
 		tw->tw_substate	  = TCP_TIME_WAIT;
 		tcptw->tw_rcv_nxt = TCP_SKB_CB(skb)->end_seq;
 		if (tmp_opt.saw_tstamp) {
 			tcptw->tw_ts_recent_stamp = ktime_get_seconds();
 			tcptw->tw_ts_recent	  = tmp_opt.rcv_tsval;
 		}
-
+		// 使用固定值60秒作为超时时间启动TIME_WAIT定时器。
 		inet_twsk_reschedule(tw, TCP_TIMEWAIT_LEN);
+		// 返回TCP_TW_ACK，表示要给对端发送ACK段。
 		return TCP_TW_ACK;
 	}
 
@@ -162,12 +179,15 @@ tcp_timewait_state_process(struct inet_timewait_sock *tw, struct sk_buff *skb,
 	 *	(2)  returns to TIME-WAIT state if the SYN turns out
 	 *	to be an old duplicate".
 	 */
+	// TIME_WAIT状态预期段的输入处理。
 
+	// 如果序号没有回卷，且正是预期接收的段，段中没有负荷或段中存在RST标志，则做相应的处理。
 	if (!paws_reject &&
 	    (TCP_SKB_CB(skb)->seq == tcptw->tw_rcv_nxt &&
 	     (TCP_SKB_CB(skb)->seq == TCP_SKB_CB(skb)->end_seq || th->rst))) {
 		/* In window segment, it may be only reset or bare ack. */
-
+		// 为了防止TIME_WAIT assassination hazards问题，如果是RST段，且tcp_rfc1337为0，
+		// 则将丢弃那些发往TIME_WAIT状态TCP套接字的RST段，直接返回TCP_TW_SUCCESS.
 		if (th->rst) {
 			/* This is TIME_WAIT assassination, in two flavors.
 			 * Oh well... nobody has a sufficient solution to this
@@ -181,6 +201,8 @@ kill:
 		} else {
 			inet_twsk_reschedule(tw, TCP_TIMEWAIT_LEN);
 		}
+		// 如果不丢弃那些发往TIME_WAIT状态TCP套接字的RST段，
+		// 则timewait控制块进入TIME_WAIT等待阶段，并返回TCP_TW_SUCCESS
 
 		if (tmp_opt.saw_tstamp) {
 			tcptw->tw_ts_recent	  = tmp_opt.rcv_tsval;
@@ -207,7 +229,8 @@ kill:
 	   we must return socket to time-wait state. It is not good,
 	   but not fatal yet.
 	 */
-
+	// 如果TIME_WAIT状态下接收到SYN段，且SYN段中没有RST和ACK标志，
+	// 序号有效，则表示可以接受该连接请求，重新计算初始序号后，返回TCP_TW_SYN。
 	if (th->syn && !th->rst && !th->ack && !paws_reject &&
 	    (after(TCP_SKB_CB(skb)->seq, tcptw->tw_rcv_nxt) ||
 	     (tmp_opt.saw_tstamp &&
@@ -215,6 +238,9 @@ kill:
 		u32 isn = tcptw->tw_snd_nxt + 65535 + 2;
 		if (isn == 0)
 			isn++;
+		// 接收到段中TCP_SKB_CB(skb)->tcp_tw_isn通常为0，此时用接收到的序号更新到
+		// tcp_tw_isn中，实际上是设置了一个标志，说明传输控制块在TIME_WAIT状态下接收到了连接请求。
+		// 在处理连接请求的tcp_conn_request中会检测该标记
 		TCP_SKB_CB(skb)->tcp_tw_isn = isn;
 		return TCP_TW_SYN;
 	}
@@ -222,6 +248,7 @@ kill:
 	if (paws_reject)
 		__NET_INC_STATS(twsk_net(tw), LINUX_MIB_PAWSESTABREJECTED);
 
+	// 如果在TIME_WAIT状态下接收到序号回绕段，则启动TIME_WAIT定时器，返回TCP_TW_ACK
 	if (!th->rst) {
 		/* In this case we must reset the TIMEWAIT timer.
 		 *
