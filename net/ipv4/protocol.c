@@ -29,6 +29,7 @@ EXPORT_SYMBOL(inet_protos);
 const struct net_offload __rcu *inet_offloads[MAX_INET_PROTOS] __read_mostly;
 EXPORT_SYMBOL(inet_offloads);
 
+// 向inet_protos结构体注册协议的操作集合。
 int inet_add_protocol(const struct net_protocol *prot, unsigned char protocol)
 {
 	return !cmpxchg((const struct net_protocol **)&inet_protos[protocol],

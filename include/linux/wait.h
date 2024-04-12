@@ -183,6 +183,7 @@ static inline void __add_wait_queue(struct wait_queue_head *wq_head, struct wait
 
 /*
  * Used for wake-one threads:
+ * 添加到等待队列
  */
 static inline void
 __add_wait_queue_exclusive(struct wait_queue_head *wq_head, struct wait_queue_entry *wq_entry)

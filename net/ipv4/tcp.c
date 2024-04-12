@@ -485,7 +485,7 @@ static bool tcp_stream_is_readable(struct sock *sk, int target)
 
 /*
  *	Wait for a TCP event.
- *
+ *  等待tcp事件
  *	Note that we don't need to lock the socket, as the upper poll layers
  *	take care of normal races (between the test and the event) and we don't
  *	go look at any of the socket buffers directly.
@@ -496,7 +496,7 @@ __poll_t tcp_poll(struct file *file, struct socket *sock, poll_table *wait)
 	struct sock *sk = sock->sk;
 	const struct tcp_sock *tp = tcp_sk(sk);
 	int state;
-
+	// 获取socket的等待队列头
 	sock_poll_wait(file, sock, wait);
 
 	state = inet_sk_state_load(sk);
@@ -2373,7 +2373,7 @@ static int tcp_inq_hint(struct sock *sk)
 
 /*
  *	This routine copies from a sock struct into the user buffer.
- *
+ *  该程序从一个sock结构复制到用户缓冲区
  *	Technical note: in 2.3 we work on _locked_ socket, so that
  *	tricks with *seq access order and skb->users are not required.
  *	Probably, code can be easily improved even more.
@@ -2447,6 +2447,7 @@ static int tcp_recvmsg_locked(struct sock *sk, struct msghdr *msg, size_t len,
 		/* Next get a buffer. */
 
 		last = skb_peek_tail(&sk->sk_receive_queue);
+		// 遍历接收队列接收数据
 		skb_queue_walk(&sk->sk_receive_queue, skb) {
 			last = skb;
 			/* Now that we have two receive queues this
@@ -2518,7 +2519,9 @@ static int tcp_recvmsg_locked(struct sock *sk, struct msghdr *msg, size_t len,
 		if (copied >= target) {
 			/* Do not sleep, just process backlog. */
 			__sk_flush_backlog(sk);
-		} else {
+		} 
+		// 阻塞等待接收数据
+		else {
 			tcp_cleanup_rbuf(sk, copied);
 			sk_wait_data(sk, &timeo, last);
 		}
@@ -2620,6 +2623,7 @@ recv_sndq:
 	goto out;
 }
 
+// tcp收取数据包
 int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int flags,
 		int *addr_len)
 {
@@ -2635,6 +2639,7 @@ int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int flags,
 		sk_busy_loop(sk, flags & MSG_DONTWAIT);
 
 	lock_sock(sk);
+	// 该程序从一个sock结构复制到用户缓冲区
 	ret = tcp_recvmsg_locked(sk, msg, len, flags, &tss, &cmsg_flags);
 	release_sock(sk);
 

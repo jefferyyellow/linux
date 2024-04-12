@@ -10,6 +10,7 @@ struct smpboot_thread_data;
 
 /**
  * struct smp_hotplug_thread - CPU hotplug related thread descriptor
+ * 热插拔的线程描述符
  * @store:		Pointer to per cpu storage for the task pointers
  * @list:		List head for core management
  * @thread_should_run:	Check whether the thread should run or not. Called with
@@ -31,6 +32,7 @@ struct smpboot_thread_data;
 struct smp_hotplug_thread {
 	struct task_struct		* __percpu *store;
 	struct list_head		list;
+	// 检验是否需要运行
 	int				(*thread_should_run)(unsigned int cpu);
 	void				(*thread_fn)(unsigned int cpu);
 	void				(*create)(unsigned int cpu);

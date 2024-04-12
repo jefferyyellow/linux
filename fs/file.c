@@ -598,7 +598,7 @@ EXPORT_SYMBOL(put_unused_fd);
  * This consumes the "file" refcount, so callers should treat it
  * as if they had called fput(file).
  */
-
+// 在fd数组中安装一个文件指针
 void fd_install(unsigned int fd, struct file *file)
 {
 	struct files_struct *files = current->files;

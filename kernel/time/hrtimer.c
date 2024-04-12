@@ -2343,6 +2343,7 @@ schedule_hrtimeout_range_clock(ktime_t *expires, u64 delta,
  * Returns 0 when the timer has expired. If the task was woken before the
  * timer expired by a signal (only possible in state TASK_INTERRUPTIBLE) or
  * by an explicit wakeup, it returns -EINTR.
+ * 睡到超时
  */
 int __sched schedule_hrtimeout_range(ktime_t *expires, u64 delta,
 				     const enum hrtimer_mode mode)

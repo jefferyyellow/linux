@@ -5261,6 +5261,7 @@ static int __must_check tcp_queue_rcv(struct sock *sk, struct sk_buff *skb,
 		 tcp_try_coalesce(sk, tail,
 				  skb, fragstolen)) ? 1 : 0;
 	tcp_rcv_nxt_update(tcp_sk(sk), TCP_SKB_CB(skb)->end_seq);
+	// 将接收到的socket的数据放在队列的尾部
 	if (!eaten) {
 		__skb_queue_tail(&sk->sk_receive_queue, skb);
 		skb_set_owner_r(skb, sk);
@@ -6390,10 +6391,10 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 
 			/* Bulk data transfer: receiver */
 			skb_dst_drop(skb);
-			// 删除SKB中的TCP首部，然后将数据包添加到接收队列中缓存起来，等待进程主动读取。
-			// 设置该SKB的宿主，释放回调函数，更新传输控制块的已使用接收缓存总量及预分配缓存长度，
-			// 此时该套接口已属于当前传输控制块了。
+			// 删除SKB中的TCP首部，
 			__skb_pull(skb, tcp_header_len);
+			// 数据包添加到接收队列中缓存起来，等待进程主动读取。设置该SKB的宿主，释放回调函数，
+			// 更新传输控制块的已使用接收缓存总量及预分配缓存长度，此时该套接口已属于当前传输控制块了。
 			eaten = tcp_queue_rcv(sk, skb, &fragstolen);
 			// 延时控制块的更新
 			tcp_event_data_recv(sk, skb);
@@ -6419,7 +6420,7 @@ no_ack:
 			// SKB已经复制到用户空间，则释放之
 			if (eaten)
 				kfree_skb_partial(skb, fragstolen);
-			// 唤醒当前套接口的进程等待队列fasync_list上的进程，通知它们读取数据
+			// 唤醒当前套接口的进程等待队列的进程，通知它们读取数据
 			tcp_data_ready(sk);
 			return;
 		}

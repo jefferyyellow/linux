@@ -547,15 +547,15 @@ DECLARE_STATIC_KEY_FALSE(force_irqthreads_key);
 
 enum
 {
-	HI_SOFTIRQ=0,
-	TIMER_SOFTIRQ,
-	NET_TX_SOFTIRQ,
-	NET_RX_SOFTIRQ,
-	BLOCK_SOFTIRQ,
-	IRQ_POLL_SOFTIRQ,
-	TASKLET_SOFTIRQ,
-	SCHED_SOFTIRQ,
-	HRTIMER_SOFTIRQ,
+	HI_SOFTIRQ=0,		// 高优先级的小任务
+	TIMER_SOFTIRQ,		// 定时器软中断
+	NET_TX_SOFTIRQ,		// 网络栈发送报文的软中断
+	NET_RX_SOFTIRQ,		// 网络栈接收报文的软中断
+	BLOCK_SOFTIRQ,		// 块设备软中断
+	IRQ_POLL_SOFTIRQ,	// 支持IO轮询的块设备软中断
+	TASKLET_SOFTIRQ,	// 低优先级的小任务
+	SCHED_SOFTIRQ,		// 调度软中断，用于在处理器之间的负载均衡
+	HRTIMER_SOFTIRQ,	// 高精度定时器
 	RCU_SOFTIRQ,    /* Preferable RCU should always be the last softirq */
 
 	NR_SOFTIRQS

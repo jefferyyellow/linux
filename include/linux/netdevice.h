@@ -3092,6 +3092,7 @@ static inline bool dev_has_header(const struct net_device *dev)
 
 /*
  * Incoming packets are placed on per-CPU queues
+ * 传入数据包放置在每个 CPU 队列中
  */
 struct softnet_data {
 	struct list_head	poll_list;

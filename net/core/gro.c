@@ -599,6 +599,7 @@ struct packet_offload *gro_find_complete_by_type(__be16 type)
 }
 EXPORT_SYMBOL(gro_find_complete_by_type);
 
+// 数据包将被送到协议栈中
 static gro_result_t napi_skb_finish(struct napi_struct *napi,
 				    struct sk_buff *skb,
 				    gro_result_t ret)
@@ -625,7 +626,7 @@ static gro_result_t napi_skb_finish(struct napi_struct *napi,
 
 	return ret;
 }
-
+// ⽹卡GRO特性，可以简单理解成把相关的⼩包合并成⼀个⼤包，⽬的是减少传送给⽹络栈的包数，这有助于减少对CPU的使⽤量
 gro_result_t napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb)
 {
 	gro_result_t ret;

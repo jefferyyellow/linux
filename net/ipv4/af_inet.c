@@ -248,6 +248,7 @@ EXPORT_SYMBOL(inet_listen);
 
 /*
  *	Create an inet socket.
+ *  创建一个inet套接字
  */
 
 static int inet_create(struct net *net, struct socket *sock, int protocol,
@@ -316,7 +317,9 @@ lookup_protocol:
 	    !ns_capable(net->user_ns, CAP_NET_RAW))
 		goto out_rcu_unlock;
 
+	// 将inet_stream_ops赋到sock->ops上
 	sock->ops = answer->ops;
+	// 获取tcp_port
 	answer_prot = answer->prot;
 	answer_flags = answer->flags;
 	rcu_read_unlock();
@@ -324,6 +327,7 @@ lookup_protocol:
 	WARN_ON(!answer_prot->slab);
 
 	err = -ENOMEM;
+	// 分配sock对象，并把tcp_prot赋到sock->sk_prot上
 	sk = sk_alloc(net, PF_INET, GFP_KERNEL, answer_prot, kern);
 	if (!sk)
 		goto out;
@@ -332,6 +336,7 @@ lookup_protocol:
 	if (INET_PROTOSW_REUSE & answer_flags)
 		sk->sk_reuse = SK_CAN_REUSE;
 
+	
 	inet = inet_sk(sk);
 	inet->is_icsk = (INET_PROTOSW_ICSK & answer_flags) != 0;
 
@@ -349,7 +354,7 @@ lookup_protocol:
 		inet->pmtudisc = IP_PMTUDISC_WANT;
 
 	inet->inet_id = 0;
-
+	// 对socket对象进行初始化
 	sock_init_data(sock, sk);
 
 	sk->sk_destruct	   = inet_sock_destruct;
@@ -880,6 +885,8 @@ EXPORT_SYMBOL(inet_sendpage);
 
 INDIRECT_CALLABLE_DECLARE(int udp_recvmsg(struct sock *, struct msghdr *,
 					  size_t, int, int *));
+					  
+// 收取数据包
 int inet_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 		 int flags)
 {
@@ -1778,7 +1785,7 @@ static const struct net_protocol igmp_protocol = {
 /* thinking of making this const? Don't.
  * early_demux can change based on sysctl.
  */
-// TCP的net_protocol实例
+// TCP的处理函数结构
 static struct net_protocol tcp_protocol = {
 	.early_demux	=	tcp_v4_early_demux,
 	.early_demux_handler =  tcp_v4_early_demux,
@@ -1793,6 +1800,7 @@ static struct net_protocol tcp_protocol = {
 /* thinking of making this const? Don't.
  * early_demux can change based on sysctl.
  */
+// udp的处理函数结构
 static struct net_protocol udp_protocol = {
 	.early_demux =	udp_v4_early_demux,
 	.early_demux_handler =	udp_v4_early_demux,
@@ -1989,6 +1997,9 @@ static struct packet_type ip_packet_type __read_mostly = {
 	.list_func = ip_list_rcv,
 };
 
+// 开始网络协议注册
+// 注册INET协议族的SOCKET创建方法，注册TCP、UDP、ICMP、IGMP接口基本的收包方法。
+// 为IPv4协议族创建proc文件。此函数为协议栈主要的注册函数：
 static int __init inet_init(void)
 {
 	struct inet_protosw *q;
@@ -1996,11 +2007,11 @@ static int __init inet_init(void)
 	int rc;
 
 	sock_skb_cb_check_size(sizeof(struct inet_skb_parm));
-
+	// 注册tcp协议,并且为其分配快速缓存
 	rc = proto_register(&tcp_prot, 1);
 	if (rc)
 		goto out;
-
+	// 注册udp协议,并且为其分配快速缓存
 	rc = proto_register(&udp_prot, 1);
 	if (rc)
 		goto out_unregister_tcp_proto;
@@ -2025,12 +2036,15 @@ static int __init inet_init(void)
 
 	/*
 	 *	Add all the base protocols.
+	 * 将协议的操作放入inet_protos中
 	 */
-
+	// 注册传输层ICMP的操作集合,
 	if (inet_add_protocol(&icmp_protocol, IPPROTO_ICMP) < 0)
 		pr_crit("%s: Cannot add ICMP protocol\n", __func__);
+	// 注册传输层UDP的操作集合
 	if (inet_add_protocol(&udp_protocol, IPPROTO_UDP) < 0)
 		pr_crit("%s: Cannot add UDP protocol\n", __func__);
+	// 注册传输层TCP的操作集合
 	if (inet_add_protocol(&tcp_protocol, IPPROTO_TCP) < 0)
 		pr_crit("%s: Cannot add TCP protocol\n", __func__);
 #ifdef CONFIG_IP_MULTICAST
@@ -2095,7 +2109,7 @@ static int __init inet_init(void)
 	ipv4_proc_init();
 
 	ipfrag_init();
-
+	// 注册到IP的操作集合，将IP协议的操作放入ptype_base中
 	dev_add_pack(&ip_packet_type);
 
 	ip_tunnel_core_init();

@@ -525,6 +525,7 @@ static inline bool lockdep_softirq_start(void) { return false; }
 static inline void lockdep_softirq_end(bool in_hardirq) { }
 #endif
 
+// 处理软中断
 asmlinkage __visible void __softirq_entry __do_softirq(void)
 {
 	unsigned long end = jiffies + MAX_SOFTIRQ_TIME;
@@ -555,7 +556,7 @@ restart:
 	local_irq_enable();
 
 	h = softirq_vec;
-
+	// 遍历软中断
 	while ((softirq_bit = ffs(pending))) {
 		unsigned int vec_nr;
 		int prev_count;
@@ -568,6 +569,7 @@ restart:
 		kstat_incr_softirqs_this_cpu(vec_nr);
 
 		trace_softirq_entry(vec_nr);
+		// 调用软中断处理函数
 		h->action(h);
 		trace_softirq_exit(vec_nr);
 		if (unlikely(prev_count != preempt_count())) {
@@ -705,14 +707,15 @@ void raise_softirq(unsigned int nr)
 	raise_softirq_irqoff(nr);
 	local_irq_restore(flags);
 }
-
+// 触发一个软中断
 void __raise_softirq_irqoff(unsigned int nr)
 {
 	lockdep_assert_irqs_disabled();
 	trace_softirq_raise(nr);
+	// 触发过程只是对一个变量进行了一次或运算而已
 	or_softirq_pending(1UL << nr);
 }
-
+// 注册软中断对应的处理函数
 void open_softirq(int nr, void (*action)(struct softirq_action *))
 {
 	softirq_vec[nr].action = action;
@@ -922,7 +925,7 @@ static int ksoftirqd_should_run(unsigned int cpu)
 {
 	return local_softirq_pending();
 }
-
+// 该函数的功能是在指定的CPU上运行ksoftirqd内核线程。ksoftirqd内核线程用于处理软件中断（SoftIRQ）。
 static void run_ksoftirqd(unsigned int cpu)
 {
 	ksoftirqd_run_begin();
@@ -930,6 +933,7 @@ static void run_ksoftirqd(unsigned int cpu)
 		/*
 		 * We can safely run softirq on inline stack, as we are not deep
 		 * in the task stack here.
+		 * 我们可以在内联堆栈上安全地运行软中断，因为我们在这里的任务堆栈并不深入。
 		 */
 		__do_softirq();
 		ksoftirqd_run_end();
@@ -968,14 +972,14 @@ static int takeover_tasklets(unsigned int cpu)
 #else
 #define takeover_tasklets	NULL
 #endif /* CONFIG_HOTPLUG_CPU */
-
+// 软中断线程
 static struct smp_hotplug_thread softirq_threads = {
 	.store			= &ksoftirqd,
 	.thread_should_run	= ksoftirqd_should_run,
 	.thread_fn		= run_ksoftirqd,
 	.thread_comm		= "ksoftirqd/%u",
 };
-
+// 用于在内核启动时启动一个 ksoftirqd 线程
 static __init int spawn_ksoftirqd(void)
 {
 	cpuhp_setup_state_nocalls(CPUHP_SOFTIRQ_DEAD, "softirq:dead", NULL,

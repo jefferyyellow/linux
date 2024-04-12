@@ -34,7 +34,7 @@
 #define MAX_INET_PROTOS		256
 
 /* This is used to register protocols. */
-// 这用于注册协议
+// 这用于注册协议，某一个协议的处理函数集合
 struct net_protocol {
 	int			(*early_demux)(struct sk_buff *skb);
 	int			(*early_demux_handler)(struct sk_buff *skb);

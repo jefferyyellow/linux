@@ -4007,10 +4007,12 @@ bool ttwu_state_match(struct task_struct *p, unsigned int state, int *success)
 
 /**
  * try_to_wake_up - wake up a thread
- * @p: the thread to be awakened
+ * @p: the thread to be awakened 
+ * 唤醒的线程
  * @state: the mask of task states that can be woken
+ * 可唤醒的任务状态掩码
  * @wake_flags: wake modifier flags (WF_*)
- *
+ * 唤醒修改标志
  * Conceptually does:
  *
  *   If (@state & @p->state) @p->state = TASK_RUNNING.
@@ -4041,6 +4043,8 @@ bool ttwu_state_match(struct task_struct *p, unsigned int state, int *success)
  *
  * Return: %true if @p->state changes (an actual wakeup was done),
  *	   %false otherwise.
+ *
+ * 唤醒指定线程
  */
 static int
 try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
@@ -6299,7 +6303,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 
 /*
  * __schedule() is the main scheduler function.
- *
+ * 最主要的调度程序
  * The main means of driving the scheduler and thus entering this function are:
  *
  *   1. Explicit blocking: mutex, semaphore, waitqueue, etc.
@@ -6418,7 +6422,7 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 		}
 		switch_count = &prev->nvcsw;
 	}
-
+	// 挑选下一个任务
 	next = pick_next_task(rq, prev, &rf);
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
@@ -6455,6 +6459,7 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 		trace_sched_switch(sched_mode & SM_MASK_PREEMPT, prev, next, prev_state);
 
 		/* Also unlocks the rq: */
+		// 切换到下一个任务
 		rq = context_switch(rq, prev, next, &rf);
 	} else {
 		rq->clock_update_flags &= ~(RQCF_ACT_SKIP|RQCF_REQ_SKIP);
@@ -6770,7 +6775,7 @@ asmlinkage __visible void __sched preempt_schedule_irq(void)
 
 	exception_exit(prev_state);
 }
-
+// 默认唤醒函数
 int default_wake_function(wait_queue_entry_t *curr, unsigned mode, int wake_flags,
 			  void *key)
 {

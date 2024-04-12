@@ -519,7 +519,7 @@ static inline void netdev_set_addr_lockdep_class(struct net_device *dev)
  *	Add a protocol ID to the list. Now that the input handler is
  *	smarter we can dispense with all the messy stuff that used to be
  *	here.
- *
+ *  将协议ID添加到列表中。现在输入处理程序更加智能，我们可以省去以前在这里的所有混乱的东西。
  *	BEWARE!!! Protocol handlers, mangling input packets,
  *	MUST BE last in hash buckets and checking protocol handlers
  *	MUST start from promiscuous ptype_all chain in net_bh.
@@ -547,12 +547,13 @@ static inline struct list_head *ptype_head(const struct packet_type *pt)
  *	Add a protocol handler to the networking stack. The passed &packet_type
  *	is linked into kernel lists and may not be freed until it has been
  *	removed from the kernel lists.
- *
+ *  将协议处理程序添加到网络堆栈中。 传递的&packet_type链接到内核列表中，并且在从内核列表中删除之前可能不会被释放。
  *	This call does not sleep therefore it can not
  *	guarantee all CPU's that are in middle of receiving packets
  *	will see the new packet type (until the next received packet).
+ *  此调用不会休眠，因此不能保证所有正在接收数据包的CPU都会看到新的数据包类型（直到下一个接收到的数据包）。
  */
-
+// 增加包处理器
 void dev_add_pack(struct packet_type *pt)
 {
 	struct list_head *head = ptype_head(pt);
@@ -2177,6 +2178,7 @@ int dev_forward_skb_nomtu(struct net_device *dev, struct sk_buff *skb)
 	return __dev_forward_skb2(dev, skb, false) ?: netif_rx_internal(skb);
 }
 
+// 投递skb
 static inline int deliver_skb(struct sk_buff *skb,
 			      struct packet_type *pt_prev,
 			      struct net_device *orig_dev)
@@ -2184,6 +2186,7 @@ static inline int deliver_skb(struct sk_buff *skb,
 	if (unlikely(skb_orphan_frags_rx(skb, GFP_ATOMIC)))
 		return -ENOMEM;
 	refcount_inc(&skb->users);
+	// 调⽤到了协议层注册的处理函数。对应IP包来讲，就会进入ip_rcv(如果是ARP包，会进入arp_rcv)
 	return pt_prev->func(skb, skb->dev, pt_prev, orig_dev);
 }
 
@@ -4338,6 +4341,7 @@ int dev_rx_weight __read_mostly = 64;
 int dev_tx_weight __read_mostly = 64;
 
 /* Called with irq disabled */
+// 在禁用irq的情况下调用
 static inline void ____napi_schedule(struct softnet_data *sd,
 				     struct napi_struct *napi)
 {
@@ -4365,8 +4369,10 @@ static inline void ____napi_schedule(struct softnet_data *sd,
 			return;
 		}
 	}
-
+	// list_add_tail修改了CPU变量softnet_data的poll_list，将驱动napi_struct传过来的poll_list添加了进来。
+	// softnet_data中的poll_list是个双向列表，其中的设备都带着输入帧等着被处理
 	list_add_tail(&napi->poll_list, &sd->poll_list);
+	// 触发了⼀个NET_RX_SOFTIRQ类型的软中断
 	__raise_softirq_irqoff(NET_RX_SOFTIRQ);
 }
 
@@ -5317,6 +5323,9 @@ another_round:
 	if (pfmemalloc)
 		goto skip_taps;
 
+	// pcap逻辑，这里会将数据送入抓包点，tcpdump就是从这个入口抓包的
+	// topdump是通过虛拟协议的⽅式⼯作的，它会将抓包西数以协议的形式挂到ptype_all上，
+	// 设备层遍历所有的“协议〞，这样就能抓到数据包来供我们查看
 	list_for_each_entry_rcu(ptype, &ptype_all, list) {
 		if (pt_prev)
 			ret = deliver_skb(skb, pt_prev, orig_dev);
@@ -5950,7 +5959,7 @@ static int process_backlog(struct napi_struct *napi, int quota)
 /**
  * __napi_schedule - schedule for receive
  * @n: entry to schedule
- *
+ * 计划接收
  * The entry's receive function will be scheduled to run.
  * Consider using __napi_schedule_irqoff() if hard irqs are masked.
  */
@@ -6636,15 +6645,19 @@ static void skb_defer_free_flush(struct softnet_data *sd)
 	}
 }
 
+// 网络接收处理函数
 static __latent_entropy void net_rx_action(struct softirq_action *h)
 {
 	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
+	// time_limit和budget是控制循环的时间，目的是为了别让网络包的接收占用过得的CPU不放，
+	// 等下次再处理剩下的接收数据包。
 	unsigned long time_limit = jiffies +
 		usecs_to_jiffies(netdev_budget_usecs);
+	// budget可以通过内存参数调整
 	int budget = netdev_budget;
 	LIST_HEAD(list);
 	LIST_HEAD(repoll);
-
+	// 获取之前先把软中断关了，获得列表，再开启软中断
 	local_irq_disable();
 	list_splice_init(&sd->poll_list, &list);
 	local_irq_enable();
@@ -6659,7 +6672,7 @@ static __latent_entropy void net_rx_action(struct softirq_action *h)
 				goto end;
 			break;
 		}
-
+		// 获取CPU的softnet_data变量，然后遍历poll_list列表，然后执行到网卡驱动注册的poll函数
 		n = list_first_entry(&list, struct napi_struct, poll_list);
 		budget -= napi_poll(n, &repoll);
 
@@ -11337,12 +11350,14 @@ static struct pernet_operations __net_initdata default_device_ops = {
  *	Initialize the DEV module. At boot time this walks the device list and
  *	unhooks any devices that fail to initialise (normally hardware not
  *	present) and leaves us with a valid list of present and active devices.
- *
+ *  初始化DEV模块。 在启动时，它会遍历设备列表并取消所有无法初始化的设备（通常硬件不存在），
+ *  并为我们留下当前和活动设备的有效列表。
  */
 
 /*
  *       This is called single threaded during boot, so no need
  *       to take the rtnl semaphore.
+ *  这在引导过程中称为单线程，因此不需要获取 rtnl 信号量。
  */
 static int __init net_dev_init(void)
 {
@@ -11366,7 +11381,7 @@ static int __init net_dev_init(void)
 	/*
 	 *	Initialise the packet receive queues.
 	 */
-
+	// 初始化数据包接受队列
 	for_each_possible_cpu(i) {
 		struct work_struct *flush = per_cpu_ptr(&flush_works, i);
 		struct softnet_data *sd = &per_cpu(softnet_data, i);
@@ -11408,7 +11423,8 @@ static int __init net_dev_init(void)
 
 	if (register_pernet_device(&default_device_ops))
 		goto out;
-
+	// open_softirq为每⼀种软中断都注册⼀个处理函数。NET_TX_SOFTIRQ的处理函数为net_tx_action, 
+	// NET_RX_SOFTIRQ的处理函数为net_rx_action。
 	open_softirq(NET_TX_SOFTIRQ, net_tx_action);
 	open_softirq(NET_RX_SOFTIRQ, net_rx_action);
 

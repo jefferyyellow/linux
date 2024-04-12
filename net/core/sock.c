@@ -2939,6 +2939,7 @@ void __sk_flush_backlog(struct sock *sk)
 
 /**
  * sk_wait_data - wait for data to arrive at sk_receive_queue
+ * 等待数据达到接收队列(sk_receive_queue)
  * @sk:    sock to wait on
  * @timeo: for how long
  * @skb:   last skb seen on sk_receive_queue
@@ -2950,11 +2951,13 @@ void __sk_flush_backlog(struct sock *sk)
  */
 int sk_wait_data(struct sock *sk, long *timeo, const struct sk_buff *skb)
 {
+	// 定义一个等待队列项wait
 	DEFINE_WAIT_FUNC(wait, woken_wake_function);
 	int rc;
-
+	// 将等待项加入到等待队列，sk_sleep获取sock对象下的等待队列列表头wait_queuehead_t
 	add_wait_queue(sk_sleep(sk), &wait);
 	sk_set_bit(SOCKWQ_ASYNC_WAITDATA, sk);
+	// 进入休眠等待
 	rc = sk_wait_event(sk, timeo, skb_peek_tail(&sk->sk_receive_queue) != skb, &wait);
 	sk_clear_bit(SOCKWQ_ASYNC_WAITDATA, sk);
 	remove_wait_queue(sk_sleep(sk), &wait);
@@ -3313,7 +3316,9 @@ void sock_def_readable(struct sock *sk)
 
 	rcu_read_lock();
 	wq = rcu_dereference(sk->sk_wq);
+	// 此socket的等待队列中有进程在等待
 	if (skwq_has_sleeper(wq))
+		// 唤醒等待队列上的进程
 		wake_up_interruptible_sync_poll(&wq->wait, EPOLLIN | EPOLLPRI |
 						EPOLLRDNORM | EPOLLRDBAND);
 	sk_wake_async(sk, SOCK_WAKE_WAITD, POLL_IN);
@@ -3910,7 +3915,7 @@ static int req_prot_init(const struct proto *prot)
 }
 
 // proto_register用于注册proto实例到proto_list链表中
-// prot：待注册的实例
+// prot：待注册的协议实例
 // alloc_slab：是否创建用于分配控制块的slab高速缓存。
 int proto_register(struct proto *prot, int alloc_slab)
 {

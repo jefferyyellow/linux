@@ -218,7 +218,7 @@ static const struct pci_error_handlers igb_err_handler = {
 };
 
 static void igb_init_dmac(struct igb_adapter *adapter, u32 pba);
-
+// 网卡的相关处理函数
 static struct pci_driver igb_driver = {
 	.name     = igb_driver_name,
 	.id_table = igb_pci_tbl,
@@ -649,7 +649,7 @@ struct net_device *igb_get_hw_dev(struct e1000_hw *hw)
 
 /**
  *  igb_init_module - Driver Registration Routine
- *
+ *	网卡驱动注册程序
  *  igb_init_module is the first routine called when the driver is
  *  loaded. All it does is register with the PCI subsystem.
  **/
@@ -663,6 +663,7 @@ static int __init igb_init_module(void)
 #ifdef CONFIG_IGB_DCA
 	dca_register_notify(&dca_notifier);
 #endif
+	// 注册驱动程序
 	ret = pci_register_driver(&igb_driver);
 	return ret;
 }
@@ -923,7 +924,7 @@ static void igb_configure_msix(struct igb_adapter *adapter)
 /**
  *  igb_request_msix - Initialize MSI-X interrupts
  *  @adapter: board private structure to initialize
- *
+ *  初始化MSI中断
  *  igb_request_msix allocates MSI-X vectors and requests interrupts from the
  *  kernel.
  **/
@@ -944,6 +945,8 @@ static int igb_request_msix(struct igb_adapter *adapter)
 			 "The number of queue vectors (%d) is higher than max allowed (%d)\n",
 			 adapter->num_q_vectors, MAX_Q_VECTORS);
 	}
+
+	// 遍历每一个队列
 	for (i = 0; i < num_q_vectors; i++) {
 		struct igb_q_vector *q_vector = adapter->q_vector[i];
 
@@ -963,6 +966,7 @@ static int igb_request_msix(struct igb_adapter *adapter)
 		else
 			sprintf(q_vector->name, "%s-unused", netdev->name);
 
+		// 注册中断
 		err = request_irq(adapter->msix_entries[vector].vector,
 				  igb_msix_ring, 0, q_vector->name,
 				  q_vector);
@@ -1399,8 +1403,9 @@ err_alloc_q_vectors:
 
 /**
  *  igb_request_irq - initialize interrupts
+ *  初始化中断
  *  @adapter: board private structure to initialize
- *
+ *  
  *  Attempts to configure interrupts using the best available
  *  capabilities of the hardware and kernel.
  **/
@@ -4061,11 +4066,13 @@ static int __igb_open(struct net_device *netdev, bool resuming)
 	netif_carrier_off(netdev);
 
 	/* allocate transmit descriptors */
+	// 分配传输描述符数组
 	err = igb_setup_all_tx_resources(adapter);
 	if (err)
 		goto err_setup_tx;
 
 	/* allocate receive descriptors */
+	// 分配接收描述符数组
 	err = igb_setup_all_rx_resources(adapter);
 	if (err)
 		goto err_setup_rx;
@@ -4097,6 +4104,7 @@ static int __igb_open(struct net_device *netdev, bool resuming)
 	/* From here on the code is the same as igb_up() */
 	clear_bit(__IGB_DOWN, &adapter->state);
 
+	// 启用NAPI
 	for (i = 0; i < adapter->num_q_vectors; i++)
 		napi_enable(&(adapter->q_vector[i]->napi));
 
@@ -4196,7 +4204,7 @@ int igb_setup_tx_resources(struct igb_ring *tx_ring)
 {
 	struct device *dev = tx_ring->dev;
 	int size;
-
+	// 申请igb_tx_buffer
 	size = sizeof(struct igb_tx_buffer) * tx_ring->count;
 
 	tx_ring->tx_buffer_info = vmalloc(size);
@@ -4227,6 +4235,7 @@ err:
 /**
  *  igb_setup_all_tx_resources - wrapper to allocate Tx resources
  *				 (Descriptors) for all queues
+ *  为每个队列分配发送资源（描述符）
  *  @adapter: board private structure
  *
  *  Return 0 on success, negative on failure
@@ -4337,8 +4346,9 @@ static void igb_configure_tx(struct igb_adapter *adapter)
 
 /**
  *  igb_setup_rx_resources - allocate Rx resources (Descriptors)
+ *  分配RX资源（描述符）
  *  @rx_ring: Rx descriptor ring (for a specific queue) to setup
- *
+ *  
  *  Returns 0 on success, negative on failure
  **/
 int igb_setup_rx_resources(struct igb_ring *rx_ring)
@@ -4357,7 +4367,7 @@ int igb_setup_rx_resources(struct igb_ring *rx_ring)
 			rx_ring->queue_index);
 		return res;
 	}
-
+	// 申请igb_rx_buffer数组内存
 	size = sizeof(struct igb_rx_buffer) * rx_ring->count;
 
 	rx_ring->rx_buffer_info = vmalloc(size);
@@ -4365,6 +4375,7 @@ int igb_setup_rx_resources(struct igb_ring *rx_ring)
 		goto err;
 
 	/* Round up to nearest 4K */
+	// 申请e1000_adv_rx_desc DMA数组内存
 	rx_ring->size = rx_ring->count * sizeof(union e1000_adv_rx_desc);
 	rx_ring->size = ALIGN(rx_ring->size, 4096);
 
@@ -4373,6 +4384,7 @@ int igb_setup_rx_resources(struct igb_ring *rx_ring)
 	if (!rx_ring->desc)
 		goto err;
 
+	// 初始化队列成员
 	rx_ring->next_to_alloc = 0;
 	rx_ring->next_to_clean = 0;
 	rx_ring->next_to_use = 0;
@@ -4392,6 +4404,7 @@ err:
 /**
  *  igb_setup_all_rx_resources - wrapper to allocate Rx resources
  *				 (Descriptors) for all queues
+ *  为所有的队列分配接收队列资源
  *  @adapter: board private structure
  *
  *  Return 0 on success, negative on failure
@@ -4400,7 +4413,7 @@ static int igb_setup_all_rx_resources(struct igb_adapter *adapter)
 {
 	struct pci_dev *pdev = adapter->pdev;
 	int i, err = 0;
-
+	// 分配多个接收队列
 	for (i = 0; i < adapter->num_rx_queues; i++) {
 		err = igb_setup_rx_resources(adapter->rx_ring[i]);
 		if (err) {
@@ -6955,6 +6968,7 @@ static irqreturn_t igb_msix_ring(int irq, void *data)
 	struct igb_q_vector *q_vector = data;
 
 	/* Write the ITR value calculated from the previous interrupt. */
+	// 记录硬件的中断频率（据说是在减少对CPU的中断频率时用到）
 	igb_write_itr(q_vector);
 
 	napi_schedule(&q_vector->napi);
@@ -8069,6 +8083,7 @@ static void igb_ring_irq_enable(struct igb_q_vector *q_vector)
 
 /**
  *  igb_poll - NAPI Rx polling callback
+ *  NAPI Rx 轮询回调
  *  @napi: napi polling structure
  *  @budget: count of how many packets we should handle
  **/
@@ -8087,6 +8102,7 @@ static int igb_poll(struct napi_struct *napi, int budget)
 	if (q_vector->tx.ring)
 		clean_complete = igb_clean_tx_irq(q_vector, budget);
 
+	// 从环状buff中取下数据
 	if (q_vector->rx.ring) {
 		int cleaned = igb_clean_rx_irq(q_vector, budget);
 
@@ -8751,7 +8767,7 @@ static void igb_put_rx_buffer(struct igb_ring *rx_ring,
 	/* clear contents of rx_buffer */
 	rx_buffer->page = NULL;
 }
-
+// 从环状buff中取下数据
 static int igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
 {
 	struct igb_adapter *adapter = q_vector->adapter;
@@ -8810,6 +8826,7 @@ static int igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
 		}
 
 		/* retrieve a buffer from the ring */
+		// 将数据帧从环状缓冲区中取下来
 		if (!skb) {
 			unsigned char *hard_start = pktbuf - igb_rx_offset(rx_ring);
 			unsigned int offset = pkt_offset + igb_rx_offset(rx_ring);
@@ -8853,10 +8870,12 @@ static int igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
 		cleaned_count++;
 
 		/* fetch next buffer in frame if non-eop */
+		// 如果非eop，则获取帧中的下一个缓冲区
 		if (igb_is_non_eop(rx_ring, rx_desc))
 			continue;
 
 		/* verify the packet layout is correct */
+		// 验证数据包布局是否正确
 		if (igb_cleanup_headers(rx_ring, rx_desc, skb)) {
 			skb = NULL;
 			continue;
@@ -8866,8 +8885,10 @@ static int igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
 		total_bytes += skb->len;
 
 		/* populate checksum, timestamp, VLAN, and protocol */
+		// 填充校验和，时间戳，VLAN和协议
 		igb_process_skb_fields(rx_ring, rx_desc, skb);
-
+		// 代表⽹卡GRO特性，可以简单理解成把相关的⼩包合并成⼀个⼤包，
+		// ⽬的是减少传送给⽹络栈的包数，这有助于减少对CPU的使⽤量。
 		napi_gro_receive(&q_vector->napi, skb);
 
 		/* reset skb pointer */
@@ -8895,7 +8916,9 @@ static int igb_clean_rx_irq(struct igb_q_vector *q_vector, const int budget)
 	u64_stats_update_end(&rx_ring->rx_syncp);
 	q_vector->rx.total_packets += total_packets;
 	q_vector->rx.total_bytes += total_bytes;
-
+	
+	// skb被从RingBuffer取下来以后，会通过igb_alloc_rx_buffers申请新的skb再重新挂上去。
+	// 所以不要担⼼后⾯新包到来的时候没有skb可⽤
 	if (cleaned_count)
 		igb_alloc_rx_buffers(rx_ring, cleaned_count);
 

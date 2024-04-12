@@ -1756,6 +1756,7 @@ int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 				dst_release(dst);
 			}
 		}
+		// 连接情况下的数据处理
 		tcp_rcv_established(sk, skb);
 		return 0;
 	}
@@ -2044,7 +2045,7 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	// 在此需把存储在分片中的报文复制到SKB的线性存储区，如果发生异常就丢弃该报文。
 	if (!pskb_may_pull(skb, sizeof(struct tcphdr)))
 		goto discard_it;
-
+	// 获取tcp header
 	th = (const struct tcphdr *)skb->data;
 	// 如果TCP首部中首部长度字段的值小于不带首部的的TCP首部长度，则说明TCP数据异常
 	if (unlikely(th->doff < sizeof(struct tcphdr) / 4)) {
@@ -2065,7 +2066,7 @@ int tcp_v4_rcv(struct sk_buff *skb)
 
 	// 得到TCP头部
 	th = (const struct tcphdr *)skb->data;
-	// 
+	// 获取ip header
 	iph = ip_hdr(skb);
 lookup:
 	// 找到skb对应的socket

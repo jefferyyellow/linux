@@ -993,6 +993,8 @@ INDIRECT_CALLABLE_DECLARE(int inet_recvmsg(struct socket *, struct msghdr *,
 					   size_t, int));
 INDIRECT_CALLABLE_DECLARE(int inet6_recvmsg(struct socket *, struct msghdr *,
 					    size_t, int));
+						
+// 收取数据包
 static inline int sock_recvmsg_nosec(struct socket *sock, struct msghdr *msg,
 				     int flags)
 {
@@ -1003,6 +1005,7 @@ static inline int sock_recvmsg_nosec(struct socket *sock, struct msghdr *msg,
 
 /**
  *	sock_recvmsg - receive a message from @sock
+ *  从socket中收取一个数据包
  *	@sock: socket
  *	@msg: message to receive
  *	@flags: message flags
@@ -1494,13 +1497,14 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	 *	the protocol is 0, the family is instructed to select an appropriate
 	 *	default.
 	 */
+	// 分配Socket并允许协议族进行设置。 如果协议为0，则指示该系列选择适当的默认值。
 	sock = sock_alloc();
 	if (!sock) {
 		net_warn_ratelimited("socket: no more sockets\n");
 		return -ENFILE;	/* Not exactly a match, but its the
 				   closest posix thing */
 	}
-
+	// 设置socket的类型
 	sock->type = type;
 
 #ifdef CONFIG_MODULES
@@ -1515,6 +1519,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 #endif
 
 	rcu_read_lock();
+	// 获得每个协议族的操作表
 	pf = rcu_dereference(net_families[family]);
 	err = -EAFNOSUPPORT;
 	if (!pf)
@@ -1529,7 +1534,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 
 	/* Now protected by module ref count */
 	rcu_read_unlock();
-
+	//调用协议族的创建函数，对应AF_INET对应的是inet_create函数
 	err = pf->create(net, sock, protocol, kern);
 	if (err < 0)
 		goto out_module_put;
@@ -2193,6 +2198,8 @@ int __sys_recvfrom(int fd, void __user *ubuf, size_t size, unsigned int flags,
 	err = import_single_range(READ, ubuf, size, &iov, &msg.msg_iter);
 	if (unlikely(err))
 		return err;
+
+	// 根据用户传入的fd找到socket对象
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		goto out;

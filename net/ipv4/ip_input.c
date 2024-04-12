@@ -224,6 +224,8 @@ resubmit:
 	}
 }
 
+// inet_protos中保存着tcp_v4_rcv和udp_rcv的函数地址。这里将会根据包中的协议类型选择分发，
+// 在这里skb包将会进一步被派送到更上层的协议中，UDP和TCP。
 static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	skb_clear_delivery_time(skb);
@@ -238,6 +240,7 @@ static int ip_local_deliver_finish(struct net *net, struct sock *sk, struct sk_b
 
 /*
  * 	Deliver IP Packets to the higher protocol layers.
+ *  将IP包投递到上层协议层
  */
 int ip_local_deliver(struct sk_buff *skb)
 {
@@ -353,6 +356,7 @@ static int ip_rcv_finish_core(struct net *net, struct sock *sk,
 	/*
 	 *	Initialise the virtual path cache for the packet. It describes
 	 *	how the packet travels inside Linux networking.
+	 *  初始化包的虚拟路径缓存。它描述了数据包在Linux网络中的流动过程。
 	 */
 	if (!skb_valid_dst(skb)) {
 		err = ip_route_input_noref(skb, iph->daddr, iph->saddr,
@@ -544,6 +548,7 @@ out:
 
 /*
  * IP receive entry point
+ * IP包接收入口函数
  */
 int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt,
 	   struct net_device *orig_dev)
@@ -553,7 +558,10 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt,
 	skb = ip_rcv_core(skb, net);
 	if (skb == NULL)
 		return NET_RX_DROP;
-
+	// NF_HOOK是一个钩子函数，它就是我们日常工作中经常用到的iptables netfilter过滤。
+	// 如果你有很多或者很复杂的netfiter规则，会在这里消耗过多的CPU资源，加大网络延迟。
+	// 另外，使用NF_HOOK在源码中搜索可以搜到很多filter的过滤点，想深入研究netfilte可以从搜索NF_HOOK的这些引用处入手。
+	// 通过搜索结果可以看到，主要是在IP、ARP等层实现的。
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
 		       net, NULL, skb, dev, NULL,
 		       ip_rcv_finish);

@@ -1206,7 +1206,7 @@ static inline void sock_rps_reset_rxhash(struct sock *sk)
 	sk->sk_rxhash = 0;
 #endif
 }
-
+// 设置state=TASK_INTERRUPTIBLE，wait_woken会进入睡眠
 #define sk_wait_event(__sk, __timeo, __condition, __wait)		\
 	({	int __rc;						\
 		release_sock(__sk);					\
@@ -2163,7 +2163,7 @@ static inline void sk_set_socket(struct sock *sk, struct socket *sock)
 {
 	sk->sk_socket = sock;
 }
-
+// 获得等待队列表头
 static inline wait_queue_head_t *sk_sleep(struct sock *sk)
 {
 	BUILD_BUG_ON(offsetof(struct socket_wq, wait) != 0);
@@ -2470,6 +2470,11 @@ static inline bool skwq_has_sleeper(struct socket_wq *wq)
  * @p:              poll_table
  *
  * See the comments in the wq_has_sleeper function.
+ * 用于等待某个套接字（socket）的事件发生，例如可读、可写或者有错误。它通常用于多路复用I/O操作，
+ * 例如使用poll或select系统调用。这使得程序能够在单个线程中同时监视多个套接字，
+ * 而无需为每个套接字创建单独的线程。当调用sock_poll_wait时，它将把套接字和相关的事件添加到一个等待列表中。
+ * 然后，内核将监视这个列表中的套接字，当有任何事件发生时，内核将唤醒等待这个事件的线程。
+ * 这使得程序能够在不阻塞的情况下处理多个套接字，从而提高了程序的性能和响应能力。
  */
 static inline void sock_poll_wait(struct file *filp, struct socket *sock,
 				  poll_table *p)

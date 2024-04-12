@@ -76,6 +76,7 @@ EXPORT_SYMBOL(remove_wait_queue);
  * There are circumstances in which we can try to wake a task which has already
  * started to run but is not in state TASK_RUNNING. try_to_wake_up() returns
  * zero in this (rare) case, and we handle it by continuing to scan the queue.
+ * 内核唤醒函数.非独占唤醒（nr_exclusive == 0）只是唤醒所有内容
  */
 static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
 			int nr_exclusive, int wake_flags, void *key,
@@ -103,10 +104,11 @@ static int __wake_up_common(struct wait_queue_head *wq_head, unsigned int mode,
 
 		if (flags & WQ_FLAG_BOOKMARK)
 			continue;
-
+		// 调用等待回调函数
 		ret = curr->func(curr, mode, wake_flags, key);
 		if (ret < 0)
 			break;
+		// 递减唤醒的线程数目，为0就跳出
 		if (ret && (flags & WQ_FLAG_EXCLUSIVE) && !--nr_exclusive)
 			break;
 
@@ -195,12 +197,14 @@ EXPORT_SYMBOL_GPL(__wake_up_locked_key_bookmark);
  * If this function wakes up a task, it executes a full memory barrier before
  * accessing the task state.
  */
+// 唤醒阻塞在一个等待队列中的线程
 void __wake_up_sync_key(struct wait_queue_head *wq_head, unsigned int mode,
 			void *key)
 {
 	if (unlikely(!wq_head))
 		return;
-
+	// 唤醒，注意一下，参数nr_exclusive传入的是1，这里指的是即使多个进程都阻塞在同一个socket上，
+	// 也只唤醒一个进程。这样做是为了避免“惊群”，而不是把所有进程都唤醒
 	__wake_up_common_lock(wq_head, mode, 1, WF_SYNC, key);
 }
 EXPORT_SYMBOL_GPL(__wake_up_sync_key);
@@ -456,6 +460,7 @@ long wait_woken(struct wait_queue_entry *wq_entry, unsigned mode, long timeout)
 	 */
 	set_current_state(mode); /* A */
 	if (!(wq_entry->flags & WQ_FLAG_WOKEN) && !is_kthread_should_stop())
+		// 进入休眠
 		timeout = schedule_timeout(timeout);
 	__set_current_state(TASK_RUNNING);
 

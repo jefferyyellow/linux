@@ -3320,6 +3320,7 @@ static struct proto packet_proto = {
 
 /*
  *	Create a packet of type SOCK_PACKET.
+ *	创建一个SOCK_PACKET协议类型的包
  */
 
 static int packet_create(struct net *net, struct socket *sock, int protocol,
