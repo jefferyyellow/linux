@@ -4803,6 +4803,7 @@ static inline netdev_tx_t __netdev_start_xmit(const struct net_device_ops *ops,
 					      bool more)
 {
 	__this_cpu_write(softnet_data.xmit.more, more);
+	// 调用驱动的ops中的发送函数ndo_start_xmit将数据包传给网卡设备
 	return ops->ndo_start_xmit(skb, dev);
 }
 
@@ -4814,6 +4815,7 @@ static inline bool netdev_xmit_more(void)
 static inline netdev_tx_t netdev_start_xmit(struct sk_buff *skb, struct net_device *dev,
 					    struct netdev_queue *txq, bool more)
 {
+	// 获取设备驱动操作函数集合
 	const struct net_device_ops *ops = dev->netdev_ops;
 	netdev_tx_t rc;
 

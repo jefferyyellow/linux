@@ -305,8 +305,9 @@ static inline struct neighbour *___neigh_lookup_noref(
 	struct neigh_hash_table *nht = rcu_dereference_bh(tbl->nht);
 	struct neighbour *n;
 	u32 hash_val;
-
+	// 计算hash值，得到对应的桶位
 	hash_val = hash(pkey, dev, nht->hash_rnd) >> (32 - nht->hash_shift);
+	// 遍历桶位中所有的元素
 	for (n = rcu_dereference_bh(nht->hash_buckets[hash_val]);
 	     n != NULL;
 	     n = rcu_dereference_bh(n->next)) {
@@ -533,6 +534,7 @@ static inline int neigh_hh_output(const struct hh_cache *hh, struct sk_buff *skb
 	return dev_queue_xmit(skb);
 }
 
+// 通过邻居子系统发送skb
 static inline int neigh_output(struct neighbour *n, struct sk_buff *skb,
 			       bool skip_cache)
 {

@@ -4113,6 +4113,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	}
 
 	/* If needed, reset TLP/RTO timer when RACK doesn't set. */
+	// 删除定时器
 	if (flag & FLAG_SET_XMIT_TIMER)
 		tcp_set_xmit_timer(sk);
 
@@ -6481,12 +6482,12 @@ discard:
 	tcp_drop_reason(sk, skb, reason);
 }
 EXPORT_SYMBOL(tcp_rcv_established);
-
+// 初始化数据传输
 void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
-
+	// socket的MTU探测
 	tcp_mtup_init(sk);
 	icsk->icsk_af_ops->rebuild_header(sk);
 	tcp_init_metrics(sk);
@@ -6497,6 +6498,7 @@ void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 	 * initRTO, we only reset cwnd when more than 1 SYN/SYN-ACK
 	 * retransmission has occurred.
 	 */
+	// 初始化拥塞窗口，开始发送数据
 	if (tp->total_retrans > 1 && tp->undo_marker)
 		tcp_snd_cwnd_set(tp, 1);
 	else
@@ -6505,6 +6507,7 @@ void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 
 	bpf_skops_established(sk, bpf_op, skb);
 	/* Initialize congestion control unless BPF initialized it already: */
+	// 初始化拥塞控制，除非BPF已经初始化它
 	if (!icsk->icsk_ca_initialized)
 		tcp_init_congestion_control(sk);
 	tcp_init_buffer_space(sk);
@@ -6524,7 +6527,7 @@ void tcp_finish_connect(struct sock *sk, struct sk_buff *skb)
 		security_inet_conn_established(sk, skb);
 		sk_mark_napi_id(sk, skb);
 	}
-
+	// 初始化数据传输
 	tcp_init_transfer(sk, BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB, skb);
 
 	/* Prevent spurious tcp_cwnd_restart() on first data
@@ -6712,6 +6715,7 @@ consume:
 		// 下面是初始化与窗口有关的成员变量。
 		tcp_init_wl(tp, TCP_SKB_CB(skb)->seq);
 		tcp_try_undo_spurious_syn(sk);
+		// 处理ack
 		tcp_ack(sk, skb, FLAG_SLOWPATH);
 
 		/* Ok.. it's good. Set up sequence numbers and
@@ -6783,6 +6787,7 @@ consume:
 						  TCP_DELACK_MAX, TCP_RTO_MAX);
 			goto consume;
 		}
+		// 发送ACK
 		tcp_send_ack(sk);
 		return -1;
 	}
@@ -6948,7 +6953,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			SKB_DR_SET(reason, TCP_RESET);
 			goto discard;
 		}
-		// 处理SYN段
+		// 第一次握手，处理SYN段
 		if (th->syn) {
 			if (th->fin) {
 				SKB_DR_SET(reason, TCP_FLAGS);
@@ -6971,7 +6976,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		}
 		SKB_DR_SET(reason, TCP_FLAGS);
 		goto discard;
-	
+	// 客户端的第二次握手
 	case TCP_SYN_SENT:
 		tp->rx_opt.saw_tstamp = 0;
 		tcp_mstamp_refresh(tp);
@@ -7039,6 +7044,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		} else {
 			tcp_try_undo_spurious_syn(sk);
 			tp->retrans_stamp = 0;
+			// 初始化数据传输
 			tcp_init_transfer(sk, BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB,
 					  skb);
 			WRITE_ONCE(tp->copied_seq, tp->rcv_nxt);
@@ -7435,7 +7441,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	 * limitations, they conserve resources and peer is
 	 * evidently real one.
 	 */
-	// 启用tcp_syncookies，或者半连接队列已满就设置want_cookie
+	// 如果未开启sysctl_tcp_syncookies,并且半连接队列已满，那么该握手包将被直接丢弃
 	if ((net->ipv4.sysctl_tcp_syncookies == 2 ||
 	     inet_csk_reqsk_queue_is_full(sk)) && !isn) {
 		// 设置want_cookie
@@ -7455,6 +7461,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	if (!req)
 		goto drop;
 
+	// 构造syn+ack包
 	req->syncookie = want_cookie;
 	// 通过TCP MD5签名来保护BGP会话
 	tcp_rsk(req)->af_specific = af_ops;
@@ -7557,7 +7564,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		if (!want_cookie) {
 			// 计算超时重传
 			req->timeout = tcp_timeout_init((struct sock *)req);
-			// 将连接请求块加入SYN请求队列，并且启动ACK超时重传定时器
+			// 加入到半连接队列中，并且启动ACK超时重传定时器
 			inet_csk_reqsk_queue_hash_add(sk, req, req->timeout);
 		}
 		// 发送SYN+ACK段

@@ -422,6 +422,7 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 	const __portpair ports = INET_COMBINED_PORTS(inet->inet_dport, lport);
 	unsigned int hash = inet_ehashfn(net, daddr, lport,
 					 saddr, inet->inet_dport);
+	// 找到Hash桶
 	struct inet_ehash_bucket *head = inet_ehash_bucket(hinfo, hash);
 	spinlock_t *lock = inet_ehash_lockp(hinfo, hash);
 	struct sock *sk2;
@@ -429,11 +430,11 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 	struct inet_timewait_sock *tw = NULL;
 
 	spin_lock(lock);
-
+	// 遍历是否有相同的四元组，如果有就表示出错
 	sk_nulls_for_each(sk2, node, &head->chain) {
 		if (sk2->sk_hash != hash)
 			continue;
-
+		// 四元组是否一致
 		if (likely(inet_match(net, sk2, acookie, ports, dif, sdif))) {
 			if (sk2->sk_state == TCP_TIME_WAIT) {
 				tw = inet_twsk(sk2);
@@ -701,6 +702,7 @@ EXPORT_SYMBOL_GPL(inet_unhash);
 #define INET_TABLE_PERTURB_SIZE (1 << INET_TABLE_PERTURB_SHIFT)
 static u32 *table_perturb;
 
+// 检查是否和现在ESTABLISH状态的连接冲突
 int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 		struct sock *sk, u64 port_offset,
 		int (*check_established)(struct inet_timewait_death_row *,
@@ -710,7 +712,7 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 	struct inet_hashinfo *hinfo = death_row->hashinfo;
 	struct inet_timewait_sock *tw = NULL;
 	struct inet_bind_hashbucket *head;
-	// 获得程序控制块的端口
+	// 是否已经绑定了端口
 	int port = inet_sk(sk)->inet_num;
 	struct net *net = sock_net(sk);
 	struct inet_bind_bucket *tb;
@@ -747,7 +749,7 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 	}
 
 	l3mdev = inet_sk_bound_l3mdev(sk);
-	// 获取动态端口范围
+	// 获取动态端口范围，这里是读取net.ipv4.ip_local_port_range这个内核参数来读取管理员配置的可用的端口范围
 	inet_get_local_port_range(net, &low, &high);
 	high++; /* [32768, 60999] -> [32768, 61000[ */
 	// 得到剩余的范围
@@ -774,7 +776,7 @@ other_parity_scan:
 	for (i = 0; i < remaining; i += 2, port += 2) {
 		if (unlikely(port >= high))
 			port -= remaining;
-		// 保留端口
+		// 如果是保留端口，就是在net.ipv4.ip_local_reserved_ports中配置的端口，直接跳过
 		if (inet_is_local_reserved_port(net, port))
 			continue;
 		// 找到端口对应绑定的Hash桶
@@ -787,7 +789,7 @@ other_parity_scan:
 		 */
 		// 遍历绑定的链表中的节点
 		inet_bind_bucket_for_each(tb, &head->chain) {
-			// 找到端口相同节点
+			// 找到端口相同节点,表示端口已经被使用了
 			if (net_eq(ib_net(tb), net) && tb->l3mdev == l3mdev &&
 			    tb->port == port) {
 				// 设置被重用了，继续找，随机端口不能被重用
@@ -795,7 +797,8 @@ other_parity_scan:
 				    tb->fastreuseport >= 0)
 					goto next_port;
 				WARN_ON(hlist_empty(&tb->owners));
-				// 检测timewait复用情况
+				// 通过check_established来检测端口是否可以使用
+				// 注意：如果check_established返回0，表示该端口仍然可以接着使用
 				if (!check_established(death_row, sk,
 						       port, &tw))
 					goto ok;
@@ -868,7 +871,9 @@ int inet_hash_connect(struct inet_timewait_death_row *death_row,
 	u64 port_offset = 0;
 	// 生成一个随机数,赋值给port_offset
 	if (!inet_sk(sk)->inet_num)
+		// 根据要连接的目的IP和端口等信息生成一个随机数
 		port_offset = inet_sk_port_offset(sk);
+		// 检查是否和现在ESTABLISH状态的连接冲突
 	return __inet_hash_connect(death_row, sk, port_offset,
 				   __inet_check_established);
 }

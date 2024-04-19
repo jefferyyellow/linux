@@ -1301,6 +1301,7 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 			if (unlikely(skb_cloned(oskb)))
 				skb = pskb_copy(oskb, gfp_mask);
 			else
+				// 克隆新的skb出来
 				skb = skb_clone(oskb, gfp_mask);
 		} tcp_skb_tsorted_restore(oskb);
 
@@ -1467,7 +1468,7 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 
 	tcp_add_tx_delay(skb, tp);
 
-	// 调用发送接口queue_xmit发送报文，如果失败则返回错误码。
+	// 调用网络层发送接口queue_xmit发送报文，如果失败则返回错误码。
 	err = INDIRECT_CALL_INET(icsk->icsk_af_ops->queue_xmit,
 				 inet6_csk_xmit, ip_queue_xmit,
 				 sk, skb, &inet->cork.fl);
@@ -4088,7 +4089,7 @@ int tcp_connect(struct sock *sk)
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_ACTIVEOPENS);
 
 	/* Timer for repeating the SYN until an answer. */
-	// 设置超时重传计时器
+	// 设置超时重传计时器,超时的时间为1秒
 	inet_csk_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
 				  inet_csk(sk)->icsk_rto, TCP_RTO_MAX);
 	return 0;

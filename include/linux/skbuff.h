@@ -1042,6 +1042,7 @@ struct sk_buff {
 
 	union {
 		struct {
+			// 保存了一些路由相关的信息
 			unsigned long	_skb_refdst;
 			void		(*destructor)(struct sk_buff *skb);
 		};

@@ -523,7 +523,7 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 		goto out_err;
 
 	/* Find already established connection */
-	// 是否有已经建立的连接（完成三次握手的连接）
+	// 已经建立的连接（完成三次握手的连接）队列是否为空
 	if (reqsk_queue_empty(queue)) {
 		// 根据是否阻塞，返回睡眠时间
 		long timeo = sock_rcvtimeo(sk, flags & O_NONBLOCK);
@@ -540,6 +540,7 @@ struct sock *inet_csk_accept(struct sock *sk, int flags, int *err, bool kern)
 	}
 	// 取出已经建立的连接请求
 	req = reqsk_queue_remove(queue, sk);
+	// 得到新的套接字
 	newsk = req->sk;
 	// 如果是快速打开侦听套接字，需要等待最后ACK的到来，不能立马释放了
 	if (sk->sk_protocol == IPPROTO_TCP &&
@@ -1114,9 +1115,9 @@ int inet_csk_listen_start(struct sock *sk)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct inet_sock *inet = inet_sk(sk);
 	int err = -EADDRINUSE;
-	// 为管理完成连接请求的散列表分配存储空间
+	// 初始化全连接列表和快速打开列表
 	reqsk_queue_alloc(&icsk->icsk_accept_queue);
-	// 当前已经建立的连接数清零
+	// 全连接计数清零
 	sk->sk_ack_backlog = 0;
 	// 初始化传输控制块中与延迟发送ACK段有关的控制数据结构
 	inet_csk_delack_init(sk);
@@ -1186,9 +1187,11 @@ struct sock *inet_csk_reqsk_queue_add(struct sock *sk,
 	} else {
 		req->sk = child;
 		req->dl_next = NULL;
+		// 如果列表为空，直接给列表赋值
 		if (queue->rskq_accept_head == NULL)
 			WRITE_ONCE(queue->rskq_accept_head, req);
 		else
+			// 加入到列表尾部
 			queue->rskq_accept_tail->dl_next = req;
 		queue->rskq_accept_tail = req;
 		sk_acceptq_added(sk);
@@ -1202,6 +1205,7 @@ struct sock *inet_csk_complete_hashdance(struct sock *sk, struct sock *child,
 					 struct request_sock *req, bool own_req)
 {
 	if (own_req) {
+		// 从半连接列表中删除
 		inet_csk_reqsk_queue_drop(req->rsk_listener, req);
 		reqsk_queue_removed(&inet_csk(req->rsk_listener)->icsk_accept_queue, req);
 

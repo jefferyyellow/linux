@@ -217,9 +217,11 @@ static inline struct request_sock *reqsk_queue_remove(struct request_sock_queue 
 	struct request_sock *req;
 
 	spin_lock_bh(&queue->rskq_lock);
+	// 得到表头
 	req = queue->rskq_accept_head;
 	if (req) {
 		sk_acceptq_removed(parent);
+		// 表头变成队列下一个元素
 		WRITE_ONCE(queue->rskq_accept_head, req->dl_next);
 		if (queue->rskq_accept_head == NULL)
 			queue->rskq_accept_tail = NULL;

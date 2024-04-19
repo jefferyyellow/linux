@@ -648,6 +648,7 @@ void tcp_mark_push(struct tcp_sock *tp, struct sk_buff *skb)
 	tp->pushed_seq = tp->write_seq;
 }
 
+// 是否发送的数据已经超过最大窗口的一半
 static inline bool forced_push(const struct tcp_sock *tp)
 {
 	return after(tp->write_seq, tp->pushed_seq + (tp->max_window >> 1));
@@ -1446,7 +1447,7 @@ new_segment:
 
 		if (skb->len < size_goal || (flags & MSG_OOB) || unlikely(tp->repair))
 			continue;
-		// 检查该数据是否必须马上发送
+		// 检查该数据是否必须马上发送,forced_push判断是否未发生的数据是否已经超过最大窗口的一半了
 		if (forced_push(tp)) {
 			// 如果需要立即发送，则调用相关函数将队列中的数据都发出去
 			tcp_mark_push(tp, skb);

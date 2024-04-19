@@ -96,6 +96,7 @@ void ip_send_check(struct iphdr *iph)
 }
 EXPORT_SYMBOL(ip_send_check);
 
+// 执行netfilter过滤
 int __ip_local_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	struct iphdr *iph = ip_hdr(skb);
@@ -111,7 +112,8 @@ int __ip_local_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 		return 0;
 
 	skb->protocol = htons(ETH_P_IP);
-
+	// 执行netfilter过滤，如果iptables配置了一些规则，那么这里将检测是否命中规则，
+	// 如果你设置了非常复杂的netfilter规则，在这里这个函数将会导致你的进程的CPU开销大增
 	return nf_hook(NFPROTO_IPV4, NF_INET_LOCAL_OUT,
 		       net, sk, skb, NULL, skb_dst(skb)->dev,
 		       dst_output);
@@ -120,8 +122,9 @@ int __ip_local_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 int ip_local_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	int err;
-
+	// 执行netfilter过滤
 	err = __ip_local_out(net, sk, skb);
+	// 开始发送数据
 	if (likely(err == 1))
 		err = dst_output(net, sk, skb);
 
@@ -219,12 +222,14 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	}
 
 	rcu_read_lock_bh();
+	// 获取邻居项，找不到就会创建一个
 	neigh = ip_neigh_for_gw(rt, skb, &is_v6gw);
 	if (!IS_ERR(neigh)) {
 		int res;
 
 		sock_confirm_neigh(skb, neigh);
 		/* if crossing protocols, can not use the cached header */
+		// 继续向下层传递，进入邻居子系统传递
 		res = neigh_output(neigh, skb, is_v6gw);
 		rcu_read_unlock_bh();
 		return res;
@@ -296,10 +301,15 @@ static int __ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *
 		return dst_output(net, sk, skb);
 	}
 #endif
+	// 得到socket的mtu,
+	// gso:通用分段延后处理。指网卡在支持GSO功能时，对于超大数据包（大于MTU值），内核会将分段的工作延迟到交给驱动的前一刻。
+	// 如果网卡不支持此功能，则内核用软件的方式对数据包进行分片
 	mtu = ip_skb_dst_mtu(sk, skb);
+	// 如果支持gso，直接发送
 	if (skb_is_gso(skb))
 		return ip_finish_output_gso(net, sk, skb, mtu);
 
+	// 大于MTU就要进行分片
 	if (skb->len > mtu || IPCB(skb)->frag_max_size)
 		return ip_fragment(net, sk, skb, mtu, ip_finish_output2);
 
@@ -417,7 +427,7 @@ int ip_mc_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 			    ip_finish_output,
 			    !(IPCB(skb)->flags & IPSKB_REROUTED));
 }
-
+// ip层发送skb
 int ip_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	struct net_device *dev = skb_dst(skb)->dev, *indev = skb->dev;
@@ -426,7 +436,7 @@ int ip_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 
 	skb->dev = dev;
 	skb->protocol = htons(ETH_P_IP);
-
+	// 再一次执行netfilter过滤
 	return NF_HOOK_COND(NFPROTO_IPV4, NF_INET_POST_ROUTING,
 			    net, sk, skb, indev, dev,
 			    ip_finish_output,
@@ -450,6 +460,7 @@ static void ip_copy_addrs(struct iphdr *iph, const struct flowi4 *fl4)
 }
 
 /* Note: skb->sk can be different from sk, in case of tunnels */
+// 在隧道的情况下，skb->sk可以与sk不同
 int __ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl,
 		    __u8 tos)
 {
@@ -472,6 +483,7 @@ int __ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl,
 		goto packet_routed;
 
 	/* Make sure we can route this packet. */
+	// 检查是否有路由表
 	rt = (struct rtable *)__sk_dst_check(sk, 0);
 	if (!rt) {
 		__be32 daddr;
@@ -485,6 +497,7 @@ int __ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl,
 		 * keep trying until route appears or the connection times
 		 * itself out.
 		 */
+		// 没有路由缓存项则展开查询，查找到路由项就会缓存到socket中
 		rt = ip_route_output_ports(net, fl4, sk,
 					   daddr, inet->inet_saddr,
 					   inet->inet_dport,
@@ -496,6 +509,7 @@ int __ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl,
 			goto no_route;
 		sk_setup_caps(sk, &rt->dst);
 	}
+	// 为skb设置路由表
 	skb_dst_set_noref(skb, &rt->dst);
 
 packet_routed:
@@ -503,6 +517,7 @@ packet_routed:
 		goto no_route;
 
 	/* OK, we know where to send it, allocate and build IP header. */
+	// 设置IP头
 	skb_push(skb, sizeof(struct iphdr) + (inet_opt ? inet_opt->opt.optlen : 0));
 	skb_reset_network_header(skb);
 	iph = ip_hdr(skb);
@@ -528,7 +543,7 @@ packet_routed:
 	/* TODO : should we use skb->sk here instead of sk ? */
 	skb->priority = sk->sk_priority;
 	skb->mark = sk->sk_mark;
-
+	// 发送
 	res = ip_local_out(net, sk, skb);
 	rcu_read_unlock();
 	return res;

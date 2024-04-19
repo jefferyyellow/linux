@@ -448,6 +448,7 @@ INDIRECT_CALLABLE_DECLARE(int ip_output(struct net *, struct sock *,
 /* Output packet to network from transport.  */
 static inline int dst_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
+	// 找到skb的路由表(dst条目)，然后调用路由表的output函数
 	return INDIRECT_CALL_INET(skb_dst(skb)->output,
 				  ip6_output, ip_output,
 				  net, sk, skb);

@@ -377,18 +377,22 @@ static inline int ip4_dst_hoplimit(const struct dst_entry *dst)
 	return hoplimit;
 }
 
+// 获取邻居项
 static inline struct neighbour *ip_neigh_gw4(struct net_device *dev,
 					     __be32 daddr)
 {
 	struct neighbour *neigh;
 
+	// 根据下一跳的IP地址查找邻居项，找不到就创建一个
 	neigh = __ipv4_neigh_lookup_noref(dev, (__force u32)daddr);
 	if (unlikely(!neigh))
+		// 创建一个邻居项
 		neigh = __neigh_create(&arp_tbl, &daddr, dev, false);
 
 	return neigh;
 }
 
+// 获取邻居项
 static inline struct neighbour *ip_neigh_for_gw(struct rtable *rt,
 						struct sk_buff *skb,
 						bool *is_v6gw)

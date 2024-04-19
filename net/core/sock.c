@@ -2180,6 +2180,7 @@ static void sk_init_common(struct sock *sk)
 
 /**
  *	sk_clone_lock - clone a socket, and lock its clone
+ *  克隆一个socket
  *	@sk: the socket to clone
  *	@priority: for allocation (%GFP_KERNEL, %GFP_ATOMIC, etc)
  *

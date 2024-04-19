@@ -4035,6 +4035,7 @@ static int igb_sw_init(struct igb_adapter *adapter)
 
 /**
  *  __igb_open - Called when a network interface is made active
+ *  启用网卡时调用
  *  @netdev: network interface device structure
  *  @resuming: indicates whether we are in a resume call
  *
@@ -4122,6 +4123,7 @@ static int __igb_open(struct net_device *netdev, bool resuming)
 		wr32(E1000_CTRL_EXT, reg_data);
 	}
 
+	// 开启全部队列
 	netif_tx_start_all_queues(netdev);
 
 	if (!resuming)
@@ -4212,6 +4214,7 @@ int igb_setup_tx_resources(struct igb_ring *tx_ring)
 		goto err;
 
 	/* round up to nearest 4K */
+	// 申请e1000_adv_tx_desc DMA的数组内存
 	tx_ring->size = tx_ring->count * sizeof(union e1000_adv_tx_desc);
 	tx_ring->size = ALIGN(tx_ring->size, 4096);
 
@@ -4219,7 +4222,8 @@ int igb_setup_tx_resources(struct igb_ring *tx_ring)
 					   &tx_ring->dma, GFP_KERNEL);
 	if (!tx_ring->desc)
 		goto err;
-
+	
+	// 初始化队列成员
 	tx_ring->next_to_use = 0;
 	tx_ring->next_to_clean = 0;
 
@@ -4245,8 +4249,10 @@ static int igb_setup_all_tx_resources(struct igb_adapter *adapter)
 	struct pci_dev *pdev = adapter->pdev;
 	int i, err = 0;
 
+	// 为每个队列构造一个RingBuffer
 	for (i = 0; i < adapter->num_tx_queues; i++) {
 		err = igb_setup_tx_resources(adapter->tx_ring[i]);
+		// 如果其中一个出错，将分配好的也都删除了
 		if (err) {
 			dev_err(&pdev->dev,
 				"Allocation for Tx Queue %u failed\n", i);
@@ -6121,6 +6127,7 @@ static inline int igb_maybe_stop_tx(struct igb_ring *tx_ring, const u16 size)
 	return __igb_maybe_stop_tx(tx_ring, size);
 }
 
+// 将skb数据映射到网卡可访问的内存DMA区域
 static int igb_tx_map(struct igb_ring *tx_ring,
 		      struct igb_tx_buffer *first,
 		      const u8 hdr_len)
@@ -6134,18 +6141,18 @@ static int igb_tx_map(struct igb_ring *tx_ring,
 	u32 tx_flags = first->tx_flags;
 	u32 cmd_type = igb_tx_cmd_type(skb, tx_flags);
 	u16 i = tx_ring->next_to_use;
-
+	// 获取下一个可用描述符指针
 	tx_desc = IGB_TX_DESC(tx_ring, i);
 
 	igb_tx_olinfo_status(tx_ring, tx_desc, tx_flags, skb->len - hdr_len);
 
 	size = skb_headlen(skb);
 	data_len = skb->data_len;
-
+	// 为skb->data构造内存映射，以允许设备通过DMA从RAM中读取数据
 	dma = dma_map_single(tx_ring->dev, skb->data, size, DMA_TO_DEVICE);
 
 	tx_buffer = first;
-
+	// 遍历该数据包的所有分片，为skb的每个分片生成有效的映射
 	for (frag = &skb_shinfo(skb)->frags[0];; frag++) {
 		if (dma_mapping_error(tx_ring->dev, dma))
 			goto dma_error;
@@ -6197,6 +6204,7 @@ static int igb_tx_map(struct igb_ring *tx_ring,
 	}
 
 	/* write last descriptor with RS and EOP bits */
+	// 设置最后一个descriptor
 	cmd_type |= size | IGB_TXD_DCMD;
 	tx_desc->read.cmd_type_len = cpu_to_le32(cmd_type);
 
@@ -6340,6 +6348,7 @@ int igb_xmit_xdp_ring(struct igb_adapter *adapter,
 	return IGB_XDP_TX;
 }
 
+
 netdev_tx_t igb_xmit_frame_ring(struct sk_buff *skb,
 				struct igb_ring *tx_ring)
 {
@@ -6367,6 +6376,7 @@ netdev_tx_t igb_xmit_frame_ring(struct sk_buff *skb,
 	}
 
 	/* record the location of the first descriptor for this packet */
+	// 获取TX Queue中下一个可用缓冲区信息
 	first = &tx_ring->tx_buffer_info[tx_ring->next_to_use];
 	first->type = IGB_TYPE_SKB;
 	first->skb = skb;
@@ -6406,6 +6416,7 @@ netdev_tx_t igb_xmit_frame_ring(struct sk_buff *skb,
 	else if (!tso)
 		igb_tx_csum(tx_ring, first);
 
+	// igb_tx_map函数准备给设备发送的数据
 	if (igb_tx_map(tx_ring, first, hdr_len))
 		goto cleanup_tx_tstamp;
 
@@ -6439,6 +6450,7 @@ static inline struct igb_ring *igb_tx_queue_mapping(struct igb_adapter *adapter,
 	return adapter->tx_ring[r_idx];
 }
 
+// igb的发送帧的函数
 static netdev_tx_t igb_xmit_frame(struct sk_buff *skb,
 				  struct net_device *netdev)
 {
@@ -8126,6 +8138,7 @@ static int igb_poll(struct napi_struct *napi, int budget)
 
 /**
  *  igb_clean_tx_irq - Reclaim resources after transmit completes
+ *  在发送完成后回收资源
  *  @q_vector: pointer to q_vector containing needed info
  *  @napi_budget: Used to determine if we are in netpoll
  *
@@ -8170,6 +8183,7 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector, int napi_budget)
 		total_packets += tx_buffer->gso_segs;
 
 		/* free the skb */
+		// 是否skb
 		if (tx_buffer->type == IGB_TYPE_SKB)
 			napi_consume_skb(tx_buffer->skb, napi_budget);
 		else
@@ -8182,9 +8196,11 @@ static bool igb_clean_tx_irq(struct igb_q_vector *q_vector, int napi_budget)
 				 DMA_TO_DEVICE);
 
 		/* clear tx_buffer data */
+		// 清除tx_buffer数据
 		dma_unmap_len_set(tx_buffer, len, 0);
 
 		/* clear last DMA location and unmap remaining buffers */
+		// 清除最后的DMA位置，并且解除映射
 		while (tx_desc != eop_desc) {
 			tx_buffer++;
 			tx_desc++;

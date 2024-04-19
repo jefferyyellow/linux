@@ -621,6 +621,7 @@ out_reset_timer:
 	 * exponential backoff behaviour to avoid continue hammering
 	 * linear-timeout retransmissions into a black hole
 	 */
+	// 计算超时时间
 	if (sk->sk_state == TCP_ESTABLISHED &&
 	    (tp->thin_lto || net->ipv4.sysctl_tcp_thin_linear_timeouts) &&
 	    tcp_stream_is_thin(tp) &&
@@ -658,6 +659,7 @@ void tcp_write_timer_handler(struct sock *sk)
 	}
 	// 刷新TCP套接字的时钟
 	tcp_mstamp_refresh(tcp_sk(sk));
+	// 取出定时器类型
 	event = icsk->icsk_pending;
 	// 由于重传定时器和持续定时器功能是共用了一个定时器实现的，因此需根据定时器事件
 	// 来区分激活的是哪种定时器：如果event为ICSK_TIME_RETRANS，则调用tcp_retransmit_timer
@@ -669,6 +671,7 @@ void tcp_write_timer_handler(struct sock *sk)
 	case ICSK_TIME_LOSS_PROBE:
 		tcp_send_loss_probe(sk);
 		break;
+	// 超时重传
 	case ICSK_TIME_RETRANS:
 		icsk->icsk_pending = 0;
 		tcp_retransmit_timer(sk);

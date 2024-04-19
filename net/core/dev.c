@@ -3066,6 +3066,7 @@ int netif_get_num_default_rss_queues(void)
 }
 EXPORT_SYMBOL(netif_get_num_default_rss_queues);
 
+// 发起NET_TX_SOFTIRQ软中断
 static void __netif_reschedule(struct Qdisc *q)
 {
 	struct softnet_data *sd;
@@ -3079,7 +3080,7 @@ static void __netif_reschedule(struct Qdisc *q)
 	raise_softirq_irqoff(NET_TX_SOFTIRQ);
 	local_irq_restore(flags);
 }
-
+// 不是重新调度CPU状态，那就发起NET_TX_SOFTIRQ软中断
 void __netif_schedule(struct Qdisc *q)
 {
 	if (!test_and_set_bit(__QDISC_STATE_SCHED, &q->state))
@@ -3594,6 +3595,7 @@ static int xmit_one(struct sk_buff *skb, struct net_device *dev,
 	return rc;
 }
 
+// 调用驱动来发送数据包
 struct sk_buff *dev_hard_start_xmit(struct sk_buff *first, struct net_device *dev,
 				    struct netdev_queue *txq, int *ret)
 {
@@ -3801,6 +3803,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	qdisc_calculate_pkt_len(skb, q);
 
 	if (q->flags & TCQ_F_NOLOCK) {
+		//如果可以绕过排队系统
 		if (q->flags & TCQ_F_CAN_BYPASS && nolock_qdisc_is_empty(q) &&
 		    qdisc_run_begin(q)) {
 			/* Retest nolock_qdisc_is_empty() within the protection
@@ -3822,8 +3825,9 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 			qdisc_run_end(q);
 			return NET_XMIT_SUCCESS;
 		}
-
+		// 入队
 		rc = dev_qdisc_enqueue(skb, q, &to_free, txq);
+		// 开始发送
 		qdisc_run(q);
 
 no_lock_out:
@@ -4094,8 +4098,9 @@ u16 netdev_pick_tx(struct net_device *dev, struct sk_buff *skb,
 
 	if (queue_index < 0 || skb->ooo_okay ||
 	    queue_index >= dev->real_num_tx_queues) {
+		// 获得xps配置
 		int new_index = get_xps_queue(dev, sb_dev, skb);
-
+		// 自动计算队列
 		if (new_index < 0)
 			new_index = skb_tx_hash(dev, sb_dev, skb);
 
@@ -4159,6 +4164,7 @@ struct netdev_queue *netdev_core_pick_tx(struct net_device *dev,
  * * 0				- buffer successfully transmitted
  * * positive qdisc return code	- NET_XMIT_DROP etc.
  * * negative errno		- other errors
+ * 发送一段缓存
  */
 int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 {
@@ -4211,21 +4217,25 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 		skb_dst_drop(skb);
 	else
 		skb_dst_force(skb);
-
+	
+	// 选择发送队列
 	if (!txq)
 		txq = netdev_core_pick_tx(dev, skb, sb_dev);
 
+	// 获取与此队列关联的排队规则
 	q = rcu_dereference_bh(txq->qdisc);
 
 	trace_net_dev_queue(skb);
+
+	// 如果有队列，则调用__dev_xmit_skb继续处理数据
 	if (q->enqueue) {
 		rc = __dev_xmit_skb(skb, q, dev, txq);
 		goto out;
 	}
-
 	/* The device has no queue. Common case for software devices:
 	 * loopback, all the sorts of tunnels...
-
+	 * 如果设备没有队列，一般情况下是软件设备：回环设备和隧道设备
+	 * 
 	 * Really, it is unlikely that netif_tx_lock protection is necessary
 	 * here.  (f.e. loopback and IP tunnels are clean ignoring statistics
 	 * counters.)
@@ -4235,6 +4245,7 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	 * Check this and shot the lock. It is not prone from deadlocks.
 	 *Either shot noqueue qdisc, it is even simpler 8)
 	 */
+	// 回环设备处理
 	if (dev->flags & IFF_UP) {
 		int cpu = smp_processor_id(); /* ok because BHs are off */
 
@@ -4659,6 +4670,7 @@ static bool skb_flow_limit(struct sk_buff *skb, unsigned int qlen)
 /*
  * enqueue_to_backlog is called to queue an skb to a per CPU backlog
  * queue (may be a remote CPU queue).
+ * 调用enqueue_to_backlog将skb排队到每个CPU的backlog队列（可能是远程CPU队列）
  */
 static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
 			      unsigned int *qtail)
@@ -4669,6 +4681,7 @@ static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
 	unsigned int qlen;
 
 	reason = SKB_DROP_REASON_NOT_SPECIFIED;
+	// 获得cpu相关的数据
 	sd = &per_cpu(softnet_data, cpu);
 
 	rps_lock_irqsave(sd, &flags);
@@ -4678,6 +4691,7 @@ static int enqueue_to_backlog(struct sk_buff *skb, int cpu,
 	if (qlen <= netdev_max_backlog && !skb_flow_limit(skb, qlen)) {
 		if (qlen) {
 enqueue:
+			// 附加在队尾
 			__skb_queue_tail(&sd->input_pkt_queue, skb);
 			input_queue_tail_incr_save(sd, qtail);
 			rps_unlock_irq_restore(sd, &flags);
@@ -4687,6 +4701,7 @@ enqueue:
 		/* Schedule NAPI for backlog device
 		 * We can use non atomic operation since we own the queue lock
 		 */
+		// 触发软中断
 		if (!__test_and_set_bit(NAPI_STATE_SCHED, &sd->backlog.state))
 			napi_schedule_rps(sd);
 		goto enqueue;
@@ -5011,6 +5026,7 @@ int netif_rx(struct sk_buff *skb)
 }
 EXPORT_SYMBOL(netif_rx);
 
+// 软中断NET_TX_SOFTIRQ的处理函数
 static __latent_entropy void net_tx_action(struct softirq_action *h)
 {
 	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
@@ -5041,18 +5057,19 @@ static __latent_entropy void net_tx_action(struct softirq_action *h)
 				__kfree_skb_defer(skb);
 		}
 	}
-
+	// 如果output队列中还有qdisc
 	if (sd->output_queue) {
 		struct Qdisc *head;
 
 		local_irq_disable();
+		// 取得队列头
 		head = sd->output_queue;
 		sd->output_queue = NULL;
 		sd->output_queue_tailp = &sd->output_queue;
 		local_irq_enable();
 
 		rcu_read_lock();
-
+		// 遍历qdsics列表
 		while (head) {
 			struct Qdisc *q = head;
 			spinlock_t *root_lock = NULL;
@@ -5082,6 +5099,7 @@ static __latent_entropy void net_tx_action(struct softirq_action *h)
 			}
 
 			clear_bit(__QDISC_STATE_SCHED, &q->state);
+			// 发送数据
 			qdisc_run(q);
 			if (root_lock)
 				spin_unlock(root_lock);
@@ -5906,6 +5924,7 @@ static bool sd_has_rps_ipi_waiting(struct softnet_data *sd)
 #endif
 }
 
+// 环回网络的poll函数
 static int process_backlog(struct napi_struct *napi, int quota)
 {
 	struct softnet_data *sd = container_of(napi, struct softnet_data, backlog);
@@ -5923,9 +5942,10 @@ static int process_backlog(struct napi_struct *napi, int quota)
 	napi->weight = dev_rx_weight;
 	while (again) {
 		struct sk_buff *skb;
-
+		// 循环处理接收到的队列
 		while ((skb = __skb_dequeue(&sd->process_queue))) {
 			rcu_read_lock();
+			// 将数据发往协议栈
 			__netif_receive_skb(skb);
 			rcu_read_unlock();
 			input_queue_head_incr(sd);
@@ -5947,6 +5967,8 @@ static int process_backlog(struct napi_struct *napi, int quota)
 			napi->state = 0;
 			again = false;
 		} else {
+			// skb_queue_splice_tail_init()函数用于将链表a连接到链表b上，
+			// 形成一个新的链表b，并将原来a的头变成空链表。
 			skb_queue_splice_tail_init(&sd->input_pkt_queue,
 						   &sd->process_queue);
 		}

@@ -605,6 +605,7 @@ struct neighbour *neigh_lookup_nodev(struct neigh_table *tbl, struct net *net,
 }
 EXPORT_SYMBOL(neigh_lookup_nodev);
 
+// 创建邻居项
 static struct neighbour *
 ___neigh_create(struct neigh_table *tbl, const void *pkey,
 		struct net_device *dev, u32 flags,
@@ -615,6 +616,7 @@ ___neigh_create(struct neigh_table *tbl, const void *pkey,
 	struct neigh_hash_table *nht;
 	int error;
 
+	// 申请邻居表项
 	n = neigh_alloc(tbl, dev, flags, exempt_from_gc);
 	trace_neigh_create(tbl, dev, pkey, n, exempt_from_gc);
 	if (!n) {
@@ -622,6 +624,7 @@ ___neigh_create(struct neigh_table *tbl, const void *pkey,
 		goto out;
 	}
 
+	// 构造赋值
 	memcpy(n->primary_key, pkey, key_len);
 	n->dev = dev;
 	dev_hold_track(dev, &n->dev_tracker, GFP_ATOMIC);
@@ -686,6 +689,8 @@ ___neigh_create(struct neigh_table *tbl, const void *pkey,
 	rcu_assign_pointer(n->next,
 			   rcu_dereference_protected(nht->hash_buckets[hash_val],
 						     lockdep_is_held(&tbl->lock)));
+
+	// 最后添加到邻居哈希表中
 	rcu_assign_pointer(nht->hash_buckets[hash_val], n);
 	write_unlock_bh(&tbl->lock);
 	neigh_dbg(2, "neigh %p is created\n", n);
@@ -701,6 +706,7 @@ out_neigh_release:
 	goto out;
 }
 
+// 创建邻居项
 struct neighbour *__neigh_create(struct neigh_table *tbl, const void *pkey,
 				 struct net_device *dev, bool want_ref)
 {
@@ -1504,11 +1510,11 @@ static void neigh_hh_init(struct neighbour *n)
 }
 
 /* Slow and careful. */
-
+// 
 int neigh_resolve_output(struct neighbour *neigh, struct sk_buff *skb)
 {
 	int rc = 0;
-
+	// 注意，这里可能会触发arp请求
 	if (!neigh_event_send(neigh, skb)) {
 		int err;
 		struct net_device *dev = neigh->dev;
@@ -1520,11 +1526,13 @@ int neigh_resolve_output(struct neighbour *neigh, struct sk_buff *skb)
 		do {
 			__skb_pull(skb, skb_network_offset(skb));
 			seq = read_seqbegin(&neigh->ha_lock);
+			// neigh->ha就是MAC地址
 			err = dev_hard_header(skb, dev, ntohs(skb->protocol),
 					      neigh->ha, NULL, skb->len);
 		} while (read_seqretry(&neigh->ha_lock, seq));
 
 		if (err >= 0)
+			// 发送数据
 			rc = dev_queue_xmit(skb);
 		else
 			goto out_kfree_skb;

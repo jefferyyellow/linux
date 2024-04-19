@@ -1573,9 +1573,7 @@ struct sock *tcp_v4_syn_recv_sock(const struct sock *sk, struct sk_buff *skb,
 	int l3index;
 #endif
 	struct ip_options_rcu *inet_opt;
-	// 完成三次握手的队列已满
-	// 如果已经建立但未被accept的“子”传输控制块数量已经达到上限，则不能再创建新的传输控制块，
-	// 跳转到exit_overflow处统计后直接返回NULL。
+	// 全连接队列(完成三次握手的)已满
 	if (sk_acceptq_is_full(sk))
 		goto exit_overflow;
 	// 创建一个新的套接字
@@ -2077,7 +2075,7 @@ lookup:
 	sk = __inet_lookup_skb(&tcp_hashinfo, skb, __tcp_hdrlen(th), th->source,
 			       th->dest, sdif, &refcounted);
 	if (!sk)
-		goto tcp_check_req;
+		goto no_tcp_socket;
 
 process:
 	// 如果此时传输控制块处于TCP_TIME_WAIT状态，则跳转到do_time_wait处理
@@ -2089,7 +2087,7 @@ process:
 		struct request_sock *req = inet_reqsk(sk);
 		bool req_stolen = false;
 		struct sock *nsk;
-		// 从请求里面得到对应的侦听套接字
+		// 从请求里面得到对应的侦听套接字,注意这里对sk做了重新赋值
 		sk = req->rsk_listener;
 
 		drop_reason = tcp_inbound_md5_hash(sk, skb,
@@ -2129,7 +2127,7 @@ process:
 			th = (const struct tcphdr *)skb->data;
 			iph = ip_hdr(skb);
 			tcp_v4_fill_cb(skb, iph, th);
-			// 处理收到的ACK请求
+			// 处理收到的ACK请求，这里如果检查通过，会将连接从半连接队列中删除，然后加入全连接列表中
 			nsk = tcp_check_req(sk, skb, req, false, &req_stolen);
 		} else {
 			drop_reason = SKB_DROP_REASON_SOCKET_FILTER;
@@ -2152,9 +2150,10 @@ process:
 			reqsk_put(req);
 			tcp_v4_restore_cb(skb);
 		} 
-		// 新的“子”传输控制块已经建立并激活，则该“子”传输控制块需处理TCP段，同时也需
-		// 唤醒等待侦听套接口的进程，如accept()调用等。如果此时，“子”传输控制块被用户进程
-		// 锁定，则将该TCP段添加到“子”传输看的后备接收队列中。
+		// 新的传输控制块已经建立并激活，则该传输控制块需处理TCP段，同时也需
+		// 唤醒等待侦听套接口的进程，如accept()调用等。如果此时，传输控制块被用户进程
+		// 锁定，则将该TCP段添加到传输块的后备接收队列中。
+		// 函数会调用tcp_rcv_state_process来完成服务器的第三次握手
 		else if (tcp_child_process(sk, nsk, skb)) {
 			tcp_v4_send_reset(nsk, skb);
 			goto discard_and_relse;
@@ -3182,7 +3181,7 @@ struct proto tcp_prot = {
 	.disconnect		= tcp_disconnect,
 	.accept			= inet_csk_accept,
 	.ioctl			= tcp_ioctl,
-	.init			= ,
+	.init			= tcp_v4_init_sock,
 	.destroy		= tcp_v4_destroy_sock,
 	.shutdown		= tcp_shutdown,
 	.setsockopt		= tcp_setsockopt,

@@ -306,7 +306,8 @@ trace:
  * Transmit possibly several skbs, and handle the return status as
  * required. Owning qdisc running bit guarantees that only one CPU
  * can execute this function.
- *
+ * 传输可能的多个skb，并根据需要处理返回状态。 拥有qdisc运行位保证只有一个CPU可以执行该功能。
+ * 
  * Returns to the caller:
  *				false  - hardware queue frozen backoff
  *				true   - feel free to send more pkts
@@ -339,6 +340,7 @@ bool sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 	if (likely(skb)) {
 		HARD_TX_LOCK(dev, txq, smp_processor_id());
 		if (!netif_xmit_frozen_or_stopped(txq))
+			// 调用驱动程序来发送数据
 			skb = dev_hard_start_xmit(skb, dev, txq, &ret);
 		else
 			qdisc_maybe_clear_missed(q, txq);
@@ -394,6 +396,7 @@ static inline bool qdisc_restart(struct Qdisc *q, int *packets)
 	bool validate;
 
 	/* Dequeue packet */
+	// 从qdisc中取出要发送的skb
 	skb = dequeue_skb(q, &validate, packets);
 	if (unlikely(!skb))
 		return false;
@@ -403,21 +406,23 @@ static inline bool qdisc_restart(struct Qdisc *q, int *packets)
 
 	dev = qdisc_dev(q);
 	txq = skb_get_tx_queue(dev, skb);
-
+	// 继续发送
 	return sch_direct_xmit(skb, q, dev, txq, root_lock, validate);
 }
-
+// 循环发送数据
 void __qdisc_run(struct Qdisc *q)
 {
 	int quota = dev_tx_weight;
 	int packets;
-
+	// 循环从队列中取出一个skb并发送
 	while (qdisc_restart(q, &packets)) {
 		quota -= packets;
+		// CPU配额queta用尽需要延后处理
 		if (quota <= 0) {
 			if (q->flags & TCQ_F_NOLOCK)
 				set_bit(__QDISC_STATE_MISSED, &q->state);
 			else
+				// 发起NET_TX_SOFTIRQ软中断
 				__netif_schedule(q);
 
 			break;

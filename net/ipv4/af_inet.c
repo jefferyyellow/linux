@@ -210,6 +210,7 @@ int inet_listen(struct socket *sock, int backlog)
 	if (!((1 << old_state) & (TCPF_CLOSE | TCPF_LISTEN)))
 		goto out;
 
+	// 设置全连接长度
 	WRITE_ONCE(sk->sk_max_ack_backlog, backlog);
 	/* Really, if the socket is already in listen state
 	 * we can only allow the backlog to be adjusted.
@@ -634,6 +635,7 @@ static long inet_wait_for_connect(struct sock *sk, long timeo, int writebias)
 /*
  *	Connect to a remote host. There is regrettably still a little
  *	TCP 'magic' in here.
+ * 	连接一个远程主机，这里还是有一些TCP的“魔法”
  */
 int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 			  int addr_len, int flags, int is_sendmsg)
@@ -710,15 +712,16 @@ int __inet_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 		err = -EINPROGRESS;
 		break;
 	}
-
+	// 获取等待事件
 	timeo = sock_sndtimeo(sk, flags & O_NONBLOCK);
-
+	// 还没完成
 	if ((1 << sk->sk_state) & (TCPF_SYN_SENT | TCPF_SYN_RECV)) {
 		int writebias = (sk->sk_protocol == IPPROTO_TCP) &&
 				tcp_sk(sk)->fastopen_req &&
 				tcp_sk(sk)->fastopen_req->data ? 1 : 0;
 
 		/* Error code is set above */
+		// 如果需要等待完成，那就调用inet_wait_for_connect，不等待就直接返回
 		if (!timeo || !inet_wait_for_connect(sk, timeo, writebias))
 			goto out;
 
@@ -752,8 +755,7 @@ sock_error:
 }
 EXPORT_SYMBOL(__inet_stream_connect);
 
-// inet_stream_connect是connect系统调用套接口层实现，首先校验设置的地址簇，
-// 然后校验套接口的状态，套接口状态为SS_UNCONNECTED时调用传输层接口，
+// inet的连接函数
 // TCP中为tcp_v4_connect，最后等待连接的完成或失败
 // sock，为进行连接的套接口。
 // uaddr和addr_len为连接的目的地址及其长度。
@@ -857,6 +859,7 @@ int inet_send_prepare(struct sock *sk)
 }
 EXPORT_SYMBOL_GPL(inet_send_prepare);
 
+// 通过sock发送size长度的消息msg
 int inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
 	struct sock *sk = sock->sk;

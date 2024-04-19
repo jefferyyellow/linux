@@ -713,8 +713,10 @@ INDIRECT_CALLABLE_DECLARE(int inet_sendmsg(struct socket *, struct msghdr *,
 					   size_t));
 INDIRECT_CALLABLE_DECLARE(int inet6_sendmsg(struct socket *, struct msghdr *,
 					    size_t));
+// 通过sock发送消息
 static inline int sock_sendmsg_nosec(struct socket *sock, struct msghdr *msg)
 {
+	// 调用协议对应的操作函数，进入协议栈
 	int ret = INDIRECT_CALL_INET(sock->ops->sendmsg, inet6_sendmsg,
 				     inet_sendmsg, sock, msg,
 				     msg_data_left(msg));
@@ -724,6 +726,7 @@ static inline int sock_sendmsg_nosec(struct socket *sock, struct msghdr *msg)
 
 /**
  *	sock_sendmsg - send a message through @sock
+ *  通过sock发送一条消息
  *	@sock: socket
  *	@msg: message to send
  *
@@ -2019,6 +2022,7 @@ out:
 	return err;
 }
 
+// connect函数的实现
 int __sys_connect(int fd, struct sockaddr __user *uservaddr, int addrlen)
 {
 	int ret = -EBADF;
@@ -2028,9 +2032,10 @@ int __sys_connect(int fd, struct sockaddr __user *uservaddr, int addrlen)
 	f = fdget(fd);
 	if (f.file) {
 		struct sockaddr_storage address;
-		// 将地址信息从用户空间拷贝到地址空间
+		// 将地址信息从用户空间拷贝到内核空间
 		ret = move_addr_to_kernel(uservaddr, addrlen, &address);
 		if (!ret)
+			// 连接
 			ret = __sys_connect_file(f.file, &address, addrlen, 0);
 		fdput(f);
 	}
@@ -2038,6 +2043,7 @@ int __sys_connect(int fd, struct sockaddr __user *uservaddr, int addrlen)
 	return ret;
 }
 
+// connect函数
 SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
 		int, addrlen)
 {
@@ -2123,6 +2129,7 @@ SYSCALL_DEFINE3(getpeername, int, fd, struct sockaddr __user *, usockaddr,
  *	Send a datagram to a given address. We move the address into kernel
  *	space and check the user space data area is readable before invoking
  *	the protocol.
+ *  往给定的地址发送一个数据报。在调用协议层之前将地址拷贝进内核空间并且检查用户空间的数据是否可读。
  */
 int __sys_sendto(int fd, void __user *buff, size_t len, unsigned int flags,
 		 struct sockaddr __user *addr,  int addr_len)
@@ -2133,14 +2140,17 @@ int __sys_sendto(int fd, void __user *buff, size_t len, unsigned int flags,
 	struct msghdr msg;
 	struct iovec iov;
 	int fput_needed;
-
+	
+	// 导入数据
 	err = import_single_range(WRITE, buff, len, &iov, &msg.msg_iter);
 	if (unlikely(err))
 		return err;
+	// 根据句柄得到socket
 	sock = sockfd_lookup_light(fd, &err, &fput_needed);
 	if (!sock)
 		goto out;
 
+	// 构造msghdr
 	msg.msg_name = NULL;
 	msg.msg_control = NULL;
 	msg.msg_controllen = 0;
@@ -2155,6 +2165,8 @@ int __sys_sendto(int fd, void __user *buff, size_t len, unsigned int flags,
 	if (sock->file->f_flags & O_NONBLOCK)
 		flags |= MSG_DONTWAIT;
 	msg.msg_flags = flags;
+
+	// 发送数据
 	err = sock_sendmsg(sock, &msg);
 
 out_put:
@@ -2172,6 +2184,7 @@ SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
 
 /*
  *	Send a datagram down a socket.
+ *  将一个数据包发送给socket
  */
 
 SYSCALL_DEFINE4(send, int, fd, void __user *, buff, size_t, len,
