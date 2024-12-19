@@ -1642,7 +1642,7 @@ EXPORT_SYMBOL(send_sig_info);
 int
 send_sig(int sig, struct task_struct *p, int priv)
 {
-	return send_sig_info(sig, __si_special(priv), p);
+	return (sig, __si_special(priv), p);
 }
 EXPORT_SYMBOL(send_sig);
 

@@ -556,7 +556,7 @@ enum
 	TASKLET_SOFTIRQ,	// 低优先级的小任务
 	SCHED_SOFTIRQ,		// 调度软中断，用于在处理器之间的负载均衡
 	HRTIMER_SOFTIRQ,	// 高精度定时器
-	RCU_SOFTIRQ,    /* Preferable RCU should always be the last softirq */
+	RCU_SOFTIRQ,    /* RCU软中断 Preferable RCU should always be the last softirq */
 
 	NR_SOFTIRQS
 };

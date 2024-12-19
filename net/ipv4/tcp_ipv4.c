@@ -2152,7 +2152,7 @@ process:
 		} 
 		// 新的传输控制块已经建立并激活，则该传输控制块需处理TCP段，同时也需
 		// 唤醒等待侦听套接口的进程，如accept()调用等。如果此时，传输控制块被用户进程
-		// 锁定，则将该TCP段添加到传输块的后备接收队列中。
+		// 锁定，则将该TCP段添加到传输块的后备接收队列中。  
 		// 函数会调用tcp_rcv_state_process来完成服务器的第三次握手
 		else if (tcp_child_process(sk, nsk, skb)) {
 			tcp_v4_send_reset(nsk, skb);
